@@ -87,8 +87,9 @@ class WebSettings(BaseModel):
         settings = cls(**data)
         env = detect_environment()
 
-        # Env override for secrets
-        env_secret = os.environ.get("AI_RESEARCH_SECRET_KEY")
+        # Env override for secrets (WEB_SECRET_KEY kept for older .env files)
+        env_secret = (os.environ.get("AI_RESEARCH_SECRET_KEY")
+                      or os.environ.get("WEB_SECRET_KEY"))
         if env_secret:
             settings.auth.secret_key = env_secret
 

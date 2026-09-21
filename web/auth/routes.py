@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 
 from web import audit
 from web.auth import db as user_db
@@ -46,6 +47,16 @@ def _set_auth_cookies(response: Response, access: str, refresh: str, csrf: str):
 def _clear_auth_cookies(response: Response):
     for name, path in [(ACCESS_COOKIE, "/"), (REFRESH_COOKIE, "/api/auth"), (CSRF_COOKIE, "/")]:
         response.delete_cookie(name, path=path)
+
+
+def _require_csrf(request: Request) -> None:
+    cookie_csrf = request.cookies.get(CSRF_COOKIE)
+    header_csrf = request.headers.get("x-csrf-token")
+    if not cookie_csrf or cookie_csrf != header_csrf:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=ApiError.make("csrf_failed", "CSRF 校验失败"),
+        )
 
 
 def _user_out(row: dict) -> UserOut:
@@ -120,14 +131,15 @@ def logout(request: Request, response: Response):
                 user_db.revoke_session(payload["jti"])
 
     # Always clear cookies (CSRF can't prevent this)
-    _clear_auth_cookies(response)
-
     if not csrf_ok and access:
-        raise HTTPException(
+        denied = JSONResponse(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=ApiError.make("csrf_failed", "CSRF 校验失败"),
+            content=ApiError.make("csrf_failed", "CSRF 校验失败"),
         )
+        _clear_auth_cookies(denied)
+        return denied
 
+    _clear_auth_cookies(response)
     audit.log("logout", ip=request.client.host if request.client else None)
     return {"ok": True}
 
@@ -211,6 +223,7 @@ def change_password(payload: dict, request: Request, response: Response):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ApiError.make("not_authenticated", "未登录"),
         )
+    _require_csrf(request)
     user_id = int(payload_jwt["sub"])
     target = user_db.get_user_by_id(user_id)
     if not target:
@@ -286,6 +299,7 @@ def revoke_session(jti: str, request: Request, response: Response):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=ApiError.make("not_authenticated", "未登录"),
         )
+    _require_csrf(request)
     user_id = int(payload_jwt["sub"])
     session = user_db.get_session(jti)
     if not session or session["user_id"] != user_id:
@@ -345,6 +359,7 @@ def create_token(payload: dict, request: Request):
     if not payload_jwt:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=ApiError.make("not_authenticated", "登录后创建 token"))
+    _require_csrf(request)
     user_id = int(payload_jwt["sub"])
     name = (payload.get("name") or "").strip() or "api-token"
 
@@ -374,6 +389,7 @@ def revoke_token(token_id: int, request: Request):
     if not payload_jwt:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail=ApiError.make("not_authenticated", "未登录"))
+    _require_csrf(request)
     user_id = int(payload_jwt["sub"])
     if not user_db.revoke_api_token(user_id, token_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
