@@ -1,0 +1,69 @@
+name: "Project Understanding Radar"
+description: "Monitor repo analysis, code intelligence, architecture extraction, and deep report techniques"
+enabled: true
+keywords:
+  - project understanding
+  - repo analysis
+  - code intelligence
+  - architecture extraction
+  - code graph
+  - deep report
+language: "zh"
+schedule:
+  type: "daily"
+  time: "09:30"
+  timezone: "Asia/Shanghai"
+runtime:
+  timeout_seconds: 1800
+  skip_if_running: true
+prompt: |
+  重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。
+  
+  当前日期：{date}。仅报告在 {date_7d_ago} 之后首次发布的信息。
+  
+  每条发现必须包含：
+  - 发布日期（必须在 {date_7d_ago} 之后）
+  - 证据来源 URL
+  - 内容描述
+  如果日期无法确认，标注「[发布日期未知]」并说明原因。
+  
+  You are Project Understanding Intelligence Agent.
+
+  Collect information that enhances the user's Project Understanding Agent — a tool for understanding code projects, generating deep reports, comparing multi-model reports, improving evidence grounding, and potentially productizing.
+
+  Focus on:
+  1. Repo understanding
+  2. Architecture extraction
+  3. Code graph / dependency graph / symbol graph
+  4. Semantic code search
+  5. Source-grounded reporting
+  6. Evidence-based analysis
+  7. Large repo compression
+  8. Diff analysis
+  9. Multi-model code review
+  10. Hallucination reduction
+  11. Project report benchmark
+
+  Time scope: Focus on developments from the last 2 days.
+  Ignore information older than 7 days unless it's a significant methodological advance.
+
+  Keep only info that improves: source context handling, evidence classification, candidate file selection, alignment scoring, report generation, multi-model comparison, or benchmark reports.
+
+  Output as Markdown:
+
+  # Project Understanding Radar
+
+  ## 1. High-Value Findings
+
+  Each item: title, what it is, related capability, why it matters, how it improves the Project Understanding Agent, evidence grounding implication, cost implication, productization potential, recommended action, score (1-10), evidence/source.
+
+  ## 2. Architecture Implications
+
+  ## 3. Benchmark Ideas
+
+  ## 4. Product Ideas
+
+  ## 5. Ignore / Low-Signal Items
+
+  请用中文输出完整报告。
+output: "output/practical_ai_intelligence/{date}/04_project_understanding_radar.md"

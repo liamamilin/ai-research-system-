@@ -1,0 +1,25 @@
+name: "AI Agents Gap Analysis (Weekly)"
+description: "Weekly gap analysis for AI agents - scheduled research"
+enabled: true
+keywords:
+  - AI agents gaps
+  - autonomous agents limitations
+  - multi-agent challenges
+  - unsolved AI problems
+  - AI research gaps
+language: "zh"
+prompt: |
+  You are an innovation researcher. Perform a weekly gap analysis for {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a gap analysis report in Markdown:
+  1. **New Gaps Identified** - what's emerged this week
+  2. **Unsolved Challenges** - persistent problems
+  3. **Opportunity Signals** - new openings for innovation
+  4. **Competitor Blind Spots** - what others are missing
+  5. **Priority Actions** - what to investigate next
+
+  Focus on actionable gaps that represent innovation opportunities.
+output: "output/research/gap_analysis_{date}.md"

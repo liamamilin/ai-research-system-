@@ -1,0 +1,15 @@
+services:
+  ai-research:
+    build: .
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./config:/app/config:ro
+      - ./jobs:/app/jobs:ro
+      - ./output:/app/output
+      - ./state:/app/state
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    environment:
+      - AI_RESEARCH_ENV=production
+    restart: unless-stopped

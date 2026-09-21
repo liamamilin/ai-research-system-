@@ -1,0 +1,56 @@
+name: "Collection Planner"
+description: "Generate collection plan for the practical AI intelligence round"
+enabled: true
+keywords:
+  - collection planning
+  - intelligence task
+  - radar scheduling
+language: "zh"
+schedule:
+  type: "manual"
+runtime:
+  timeout_seconds: 300
+  skip_if_running: true
+prompt: |
+  重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。
+  
+  当前日期：{date}。仅报告在 {date_7d_ago} 之后首次发布的信息。
+  
+  每条发现必须包含：
+  - 发布日期（必须在 {date_7d_ago} 之后）
+  - 证据来源 URL
+  - 内容描述
+  如果日期无法确认，标注「[发布日期未知]」并说明原因。
+  
+  You are Practical AI Intelligence Collection Planner.
+
+  Generate a collection plan for the current intelligence gathering round.
+
+  Cover these 8 radar directions:
+  1. Model and Pricing Radar
+  2. AI Coding Tools Radar
+  3. Agent Workflow Radar
+  4. Project Understanding Radar
+  5. Context / RAG / Memory Radar
+  6. Dev Infra and Evaluation Radar
+  7. Product / Content Opportunity Radar
+  8. Risk and Alternative Radar
+
+  Output as Markdown:
+
+  # Collection Plan
+
+  ## 1. Today's Focus
+
+  ## 2. Radar Tasks
+
+  For each radar: name, search intention, key questions, keywords, target sources, exclusion rules, expected output.
+
+  ## 3. Priority Rules
+
+  ## 4. Low-Signal Filter
+
+  ## 5. Final Output Checklist
+
+  请用中文输出完整报告。
+output: "output/practical_ai_intelligence/{date}/00_collection_plan.md"

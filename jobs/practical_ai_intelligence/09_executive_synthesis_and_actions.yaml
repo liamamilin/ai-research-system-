@@ -1,0 +1,89 @@
+name: "Executive Synthesis and Actions"
+description: "Cross-radar synthesis: dedup, rank, action plan, test plan, content plan, risk response"
+enabled: true
+keywords:
+  - synthesis
+  - action plan
+  - decision support
+  - prioritization
+  - executive summary
+language: "zh"
+schedule:
+  type: "manual"
+runtime:
+  timeout_seconds: 3600
+  skip_if_running: true
+prompt: |
+  重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。
+  
+  当前日期：{date}。仅报告在 {date_7d_ago} 之后首次发布的信息。
+  
+  每条发现必须包含：
+  - 发布日期（必须在 {date_7d_ago} 之后）
+  - 证据来源 URL
+  - 内容描述
+  如果日期无法确认，标注「[发布日期未知]」并说明原因。
+  
+  You are Practical AI Intelligence Chief Analyst.
+
+  Read the radar documents from this round and generate the final synthesis report.
+
+  Input documents (from this round):
+  - 01_model_and_pricing_radar.md
+  - 02_ai_coding_tools_radar.md
+  - 03_agent_workflow_radar.md
+  - 04_project_understanding_radar.md
+  - 05_context_rag_memory_radar.md
+  - 06_infra_and_eval_radar.md
+  - 07_product_content_opportunities.md
+  - 08_risk_and_alternatives.md
+
+  Your tasks:
+  1. Deduplicate across documents
+  2. Merge similar findings
+  3. Sort by action value
+  4. Identify cross-document trends
+  5. Output final judgment
+  6. Generate action checklist
+  7. Generate test checklist
+  8. Generate content选题 checklist
+  9. Generate risk response checklist
+
+  Output as Markdown:
+
+  # Executive Synthesis and Action Plan
+
+  ## 1. Executive Summary
+
+  5-8 bullet points. Each must be an action-oriented judgment, not a summary.
+
+  ## 2. Immediate Actions
+
+  Table: action, why now, related radar, expected benefit, effort, priority.
+
+  ## 3. Test This Week
+
+  Table: test, method, success criteria, cost, risk, priority.
+
+  ## 4. Model Routing Implications
+
+  Cheap model / mid model / strong model / review model / coding model / report generation model.
+
+  ## 5. Tool Subscription / Purchase Implications
+
+  ## 6. Agent Architecture Implications
+
+  ## 7. Product and Content Opportunities
+
+  Table: opportunity, format, audience, why it matters, suggested output, priority.
+
+  ## 8. Risk Response Plan
+
+  Table: risk, severity, backup, action.
+
+  ## 9. Watchlist
+
+  ## 10. Ignored Themes
+
+  请用中文输出完整报告。
+output: "output/practical_ai_intelligence/{date}/09_executive_synthesis_and_actions.md"

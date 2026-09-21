@@ -1,0 +1,13 @@
+name: "Simple Test"
+description: "Basic system sanity test"
+enabled: true
+keywords:
+  - test
+  - AI
+language: "zh"
+prompt: |
+  This is a simple test. Please respond with: "System is working correctly. Current date: {date}"
+
+  Confirm you received the keywords: {keywords}
+output: "output/simple_test.md"
+

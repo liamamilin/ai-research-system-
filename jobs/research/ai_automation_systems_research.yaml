@@ -1,0 +1,197 @@
+name: "AI Automation Systems Architecture Research"
+description: "Comprehensive research on observability, state management, retry patterns, HITL, and multi-agent orchestration for Python AI automation systems"
+enabled: true
+keywords:
+  - OpenTelemetry Python tracing
+  - LangSmith LangFuse LLM observability
+  - agent state machines LangGraph checkpointing
+  - circuit breaker retry LLM API
+  - human-in-the-loop approval workflow
+  - multi-agent orchestration supervisor worker
+language: "en"
+runtime:
+  timeout_seconds: 7200
+  skip_if_running: true
+prompt: |
+  You are a senior AI infrastructure researcher. Conduct a deep, structured survey of the current state (as of mid-2026) of five critical architectural domains for Python-based AI automation systems.
+
+  Language: {language}
+  Keywords: {keywords}
+
+  For each domain, cover: (a) best practices and current tools, (b) known pain points, (c) relevance to a YAML-job-spec + run.py architecture (score 1-10), and (d) implementation difficulty (score 1-10).
+
+  Return the entire report as a single structured Markdown document with the following sections.
+
+  # AI Automation Systems Architecture Research (June 2026)
+
+  ## 1. Observability / Logging
+
+  ### 1.1 OpenTelemetry Python
+  - Current state of OpenTelemetry Python SDK and instrumentation (stable signals, auto-instrumentation coverage)
+  - Tracing for agent workflows: span hierarchies, context propagation across LLM calls and tool invocations
+  - OTLP exporters and collector deployment patterns
+  - Pain points: instrumentation gaps, performance overhead, sampling strategies for high-volume agent traces
+
+  ### 1.2 LLM Observability Platforms
+  - LangSmith: tracing, evaluation, datasets — current pricing model (2026), pain points, lock-in concerns
+  - LangFuse: open-core model, self-hosting, feature parity with LangSmith
+  - Weights & Biases (WandB): LLM monitoring capabilities, integration depth
+  - Other players: Helicone, Phoenix (Arize), MLflow — comparison matrix
+  - Pain points: vendor lock-in, cost at scale, cross-platform trace correlation
+
+  ### 1.3 Custom Logging vs Managed Observability
+  - Structured logging patterns for agentic systems (MDC-style context injection)
+  - When to roll your own vs buy — decision framework based on deployment scale
+  - Trade-offs: flexibility vs time-to-insight, maintenance burden
+
+  ### 1.4 Cost Tracking for Multi-Model Usage
+  - Per-call token accounting, model routing cost attribution
+  - Tagging and dimensional cost breakdown (agent, workflow, user)
+  - Tools: LangFuse cost tracking, custom middleware
+
+  ### Scoring
+  - Relevance to YAML-job-spec architecture (1-10): ___
+  - Implementation difficulty (1-10): ___
+
+  ## 2. State Management
+
+  ### 2.1 State Machines for Agents
+  - Formal state machine models for agent workflows (transitions, guards, persistence)
+  - Tools: `transitions` library, `stateless` (Python port), custom enums
+  - Comparison with LangGraph's graph-based state model
+
+  ### 2.2 Durable Execution Patterns
+  - Durable execution for long-running agent workflows
+  - Temporal.io Python SDK, Inngest, and serverless durable functions
+  - Checkpoint/restore on process crash
+  - Pain points: complexity overhead, testing difficulty
+
+  ### 2.3 Checkpointing: LangGraph vs Custom
+  - LangGraph's built-in checkpointing (Postgres, SQLite backends, 2026 status)
+  - Thread-level state persistence, branching, and replay
+  - Custom checkpointing strategies: pickling, DB snapshots, event-sourced state
+  - Pain points: serialization of complex state (LLM callbacks, in-flight HTTP requests)
+
+  ### 2.4 Distributed State Management
+  - Redis-based state stores for distributed agent deployments
+  - Conflict resolution for multi-instance agent teams
+  - Pain points: consistency vs availability in agent state
+
+  ### Scoring
+  - Relevance to YAML-job-spec architecture (1-10): ___
+  - Implementation difficulty (1-10): ___
+
+  ## 3. Retry / Recovery Patterns
+
+  ### 3.1 Exponential Backoff Strategies
+  - Standard backoff: `tenacity`, `backoff`, `stamina` libraries
+  - Jitter strategies (full, equal, decorrelated) for LLM API rate limits
+  - Adaptive rate limiting based on response headers (Retry-After, X-RateLimit-*)
+
+  ### 3.2 Circuit Breaker Pattern for LLM APIs
+  - Circuit breaker: `pybreaker`, `circuitbreaker` libraries
+  - Failure thresholds for LLM APIs (timeouts, 429s, 5xx)
+  - Half-open probing strategies
+  - Integration with fallback models (model routing on breaker open)
+
+  ### 3.3 Dead Letter Queues for Failed Jobs
+  - DLQ patterns in the YAML-job-spec context
+  - Storage: file-based (failed/ directory), Redis list, SQS/SQS DLQ
+  - Manual retry vs automatic replay
+
+  ### 3.4 Partial Failure Handling in Multi-Step Pipelines
+  - Saga pattern / compensating transactions for agent pipelines
+  - Checkpoint-and-resume vs full restart
+  - Dependency graphs: skip succeeded steps on retry
+
+  ### Scoring
+  - Relevance to YAML-job-spec architecture (1-10): ___
+  - Implementation difficulty (1-10): ___
+
+  ## 4. Human-in-the-Loop
+
+  ### 4.1 Approval Workflows
+  - Pause agent execution, request human approval, resume
+  - LangGraph interrupt/approval pattern (2026 status)
+  - Custom HITL: state snapshot, JSON approval schema, approval endpoint
+
+  ### 4.2 Review Gates in Automated Pipelines
+  - When to gate: high-cost LLM calls, destructive actions, deployment decisions
+  - Escalation policies: auto-approve vs block vs timeout
+  - Audit trail requirements
+
+  ### 4.3 Notification Patterns
+  - Slack Block Kit for approval cards (button-based approve/reject)
+  - Email (SendGrid, SES) for async review workflows
+  - Webhook callbacks for external approval systems
+  - Push notifications (mobile) for urgent gates
+
+  ### 4.4 Pause/Resume Patterns
+  - State serialization on pause, deserialization on resume
+  - Timeout handling: auto-reject vs keep-pending
+  - Notification on long-pending items
+
+  ### Scoring
+  - Relevance to YAML-job-spec architecture (1-10): ___
+  - Implementation difficulty (1-10): ___
+
+  ## 5. Multi-Agent Orchestration
+
+  ### 5.1 Supervisor/Worker Patterns
+  - Orchestrator-agent pattern: supervisor delegates to specialized workers
+  - LangGraph supervisor pattern, CrewAI, AutoGen, Swarm
+  - Task queue integration (Celery, Redis Queue) for worker dispatch
+  - Pain points: coordination overhead, failure cascading
+
+  ### 5.2 Debate/Consensus Patterns
+  - Multi-agent debate for fact-checking and quality assurance
+  - Consensus mechanisms: voting, referee agent, confidence thresholding
+  - Tools: LangGraph multi-agent debate, ChatDev, AgentVerse
+  - Pain points: cost of multiple LLM calls, latency, conflicting outputs
+
+  ### 5.3 Tool-Use Delegation
+  - Dynamic tool selection by agents
+  - Tool registry patterns, permission scoping for tools
+  - MCP (Model Context Protocol) for standardized tool interfaces (2026 status)
+  - Pain points: tool security sandboxing, error propagation from tool failures
+
+  ### 5.4 Agent Communication Protocols
+  - Message passing formats: JSON schemas, typed channel communication
+  - LangGraph's Send API for map-reduce agent fan-out
+  - REST vs message broker (Redis Pub/Sub, NATS) for inter-agent communication
+  - Pain points: message ordering, idempotency, debugging multi-agent flows
+
+  ### 5.5 Relevance to YAML-Job-Spec Architecture
+  - How multi-agent patterns map to declarative YAML job definitions
+  - Specifying agent teams in YAML (roles, tools, llm_config)
+  - Pipeline composition: chaining agent jobs
+
+  ### Scoring
+  - Relevance to YAML-job-spec architecture (1-10): ___
+  - Implementation difficulty (1-10): ___
+
+  ## 6. Synthesis & Recommendations
+
+  ### 6.1 Priority Matrix
+  - Which patterns to implement first for a YAML-job-spec system
+  - Effort vs impact ranking
+
+  ### 6.2 Architecture Roadmap
+  - Phase 1 (immediate) recommendations
+  - Phase 2 (near-term) recommendations
+  - Phase 3 (long-term) considerations
+
+  ### 6.3 Key Decisions
+  - Build vs buy decisions for each domain
+  - Technology choices and trade-offs
+
+  ---
+
+  **Formatting requirements:**
+  - Use proper Markdown: tables, code blocks, lists, headings
+  - Each scoring item should have a clear numeric value (e.g., `**Relevance:** 8/10`)
+  - Include specific library versions and package names where relevant
+  - Be honest about pain points and known limitations — this is for engineering decision-making
+
+  Produce the complete report in English.
+output: "output/research/ai_automation_systems_{date}.md"

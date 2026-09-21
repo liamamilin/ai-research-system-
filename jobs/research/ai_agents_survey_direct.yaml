@@ -1,0 +1,52 @@
+name: "AI Agents Direct Survey"
+description: "Direct comprehensive survey with detailed custom structure"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - agent frameworks
+  - multi-agent systems
+  - autonomous systems
+language: "zh"
+prompt: |
+  You are a domain research expert. Conduct a comprehensive survey of AI Agents.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a detailed survey report covering all dimensions:
+
+  ## 1. Domain Definition
+  - Core definitions and scope
+  - Relationship to adjacent fields
+  - Unique value proposition
+
+  ## 2. Key Concepts
+  - 10-15 foundational concepts
+  - Terminology and taxonomy
+  - Concept relationships
+
+  ## 3. Major Players
+  - 5-8 leading companies
+  - Key research institutions
+  - Important open-source projects
+  - Competitive landscape
+
+  ## 4. Technology Landscape
+  - 3-5 main technical branches
+  - Evolution paths
+  - Core technology stack
+
+  ## 5. Development Stages
+  - Historical development
+  - Current maturity level
+  - Future trajectory
+
+  ## 6. Application Scenarios
+  - Major application domains
+  - Typical use cases
+  - Success stories
+  - Current limitations
+
+  Provide at least 40 high-quality survey items. Build a complete domain map.
+output: "output/survey/ai_agents_survey_direct_{date}.md"

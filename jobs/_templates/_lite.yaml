@@ -1,0 +1,25 @@
+# ── Minimal / Quick-Query Template ──
+# Copy anywhere and customize. One-off research, quick lookups (~2-5 min).
+
+name: "<Topic> Quick Lookup"
+description: "Quick research on <topic>"
+enabled: false
+keywords:
+  - <keyword1>
+  - <keyword2>
+language: "zh"
+schedule:
+  type: "manual"
+runtime:
+  timeout_seconds: 600
+  skip_if_running: true
+prompt: |
+  Research {name}. Keywords: {keywords}. Language: {language}.
+
+  Generate a concise Markdown report with:
+  - Key findings
+  - Recent developments
+  - Notable sources
+
+  Keep it under 500 words.
+output: "output/{date}_<topic>_quick.md"

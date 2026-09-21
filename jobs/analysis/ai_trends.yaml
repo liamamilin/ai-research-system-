@@ -1,0 +1,25 @@
+name: "AI Trend Analysis"
+description: "Analyze AI domain trends and future directions"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - multi-agent systems
+  - AI trends
+  - agent frameworks
+language: "zh"
+prompt: |
+  You are a technology trend analyst. Analyze the trends in {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a trend analysis report in Markdown covering:
+  1. **Technology Evolution** - how key technologies are evolving
+  2. **Emerging Directions** - new approaches gaining traction
+  3. **Growth Signals** - indicators of accelerating adoption
+  4. **Declining Areas** - approaches losing relevance
+  5. **Future Predictions** - where the field is heading (6-12 months)
+
+  Base analysis on recent developments (last 6 months).
+output: "output/trends/ai_trends_{date}.md"

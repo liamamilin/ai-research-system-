@@ -1,0 +1,32 @@
+# ── Daily Monitoring Template ──
+# Copy to jobs/monitoring/ and customize.
+# Runs quickly (~2-5 min), checks last 24h developments.
+
+name: "Daily <Topic>"
+description: "Daily <topic> news and developments"
+enabled: false
+keywords:
+  - <keyword1>
+  - <keyword2>
+  - <keyword3>
+language: "zh"
+schedule:
+  type: "daily"         # daily | weekly | monthly | manual
+  time: "08:00"
+  timezone: "Asia/Shanghai"
+runtime:
+  timeout_seconds: 1800
+  skip_if_running: true
+prompt: |
+  You are a research analyst. Search for the latest news about {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a concise daily report in Markdown covering:
+  1. **Top Stories** - breaking news (last 24 hours)
+  2. **Important Releases** - new versions, tools, papers
+  3. **Key Insights** - patterns and takeaways
+
+  Keep it brief and signal-focused. Use bullet points.
+output: "output/monitoring/{date}_<topic>_daily.md"

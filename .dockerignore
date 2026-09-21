@@ -1,0 +1,14 @@
+__pycache__
+*.pyc
+.git
+.env
+.env.local
+node_modules
+ui/node_modules
+state/
+logs/
+output/
+.DS_Store
+*.log
+*.tmp
+*.bak

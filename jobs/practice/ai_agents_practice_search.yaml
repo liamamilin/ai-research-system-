@@ -1,0 +1,25 @@
+name: "AI Agents Practice Search"
+description: "Extended practice search with broader scope"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - agent frameworks
+  - multi-agent systems
+  - autonomous systems
+language: "zh"
+prompt: |
+  You are a research analyst. Conduct a practical search on {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Search across 5 dimensions:
+  1. **Application Cases** - real-world deployments
+  2. **Implementation Methods** - technical approaches
+  3. **Frameworks & Tools** - software and platforms
+  4. **Challenges** - common problems and solutions
+  5. **Resources** - compute, data, expertise requirements
+
+  Provide at least 30 results with type tags, descriptions, importance ratings, and source links.
+output: "output/ai_agents_practice_search_{date}.md"

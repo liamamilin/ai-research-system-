@@ -1,0 +1,25 @@
+name: "AI Agents Practice Search"
+description: "Search for practical AI agent applications and implementations"
+enabled: true
+keywords:
+  - AI agents practice
+  - autonomous agents applications
+  - agent implementation
+  - multi-agent deployment
+  - AI agent case studies
+language: "zh"
+prompt: |
+  You are a practical AI researcher. Search for real-world applications of {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a practice-oriented report in Markdown covering:
+  1. **Real Applications** - actual deployed use cases
+  2. **Implementation Methods** - how they were built
+  3. **Technical Frameworks** - tools and platforms used
+  4. **Challenges & Solutions** - problems encountered and how they were solved
+  5. **Resource Requirements** - what's needed to replicate
+
+  Focus on concrete, practical, actionable information.
+output: "output/ai_agents_practice_{date}.md"

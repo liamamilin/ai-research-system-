@@ -1,0 +1,28 @@
+# Web UI configuration (dev defaults)
+server:
+  host: "127.0.0.1"
+  port: 8765
+  base_url: "http://127.0.0.1:8765"
+
+auth:
+  secret_key: "dev-only-change-me-in-production-aaaaaaaaaaaaaaaaaa"
+  access_token_minutes: 15
+  refresh_token_days: 7
+  cookie_secure: false
+  cookie_samesite: "strict"
+
+cors:
+  enabled: true
+  origins:
+    - "http://localhost:5173"
+
+rate_limit:
+  login_per_minute: 5
+  job_run_per_minute: 10
+
+paths:
+  jobs_dir: "jobs"
+  config_dir: "config"
+  output_dir: "output"
+  state_dir: "state"
+  logs_dir: "logs"

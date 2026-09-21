@@ -1,0 +1,24 @@
+name: "AI Agents Latest Research"
+description: "Find the newest research papers and developments"
+enabled: true
+keywords:
+  - AI agents latest research
+  - autonomous agents papers
+  - multi-agent systems 2026
+  - LLM agents research
+language: "zh"
+prompt: |
+  You are a research tracker. Find the latest research about {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a report in Markdown covering:
+  1. **New Papers** - most recent publications with summaries
+  2. **Preprints** - notable arXiv papers
+  3. **Conference Updates** - key findings from recent conferences
+  4. **Industry Research** - corporate research labs output
+  5. **Key Takeaways** - what's new and important
+
+  Focus on the newest content available.
+output: "output/ai_agents_latest_research_{date}.md"

@@ -1,0 +1,68 @@
+name: "Risk and Alternatives"
+description: "Identify risks: price hikes, rate limits, model quality drops, vendor lock-in, and backup plans"
+enabled: true
+keywords:
+  - risk monitoring
+  - vendor lock-in
+  - price risk
+  - alternative tools
+  - backup plan
+language: "zh"
+schedule:
+  type: "manual"
+runtime:
+  timeout_seconds: 1800
+  skip_if_running: true
+prompt: |
+  重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。
+  
+  当前日期：{date}。仅报告在 {date_7d_ago} 之后首次发布的信息。
+  
+  每条发现必须包含：
+  - 发布日期（必须在 {date_7d_ago} 之后）
+  - 证据来源 URL
+  - 内容描述
+  如果日期无法确认，标注「[发布日期未知]」并说明原因。
+  
+  You are Risk and Alternative Intelligence Agent.
+
+  Identify risks that affect the user's AI workflow, agent pipeline, model selection, tool subscriptions, and content recommendation trust.
+
+  Focus on:
+  1. Price increases
+  2. Rate limits / throttling
+  3. Plan downgrades
+  4. API policy changes
+  5. Regional restrictions
+  6. Payment issues
+  7. Model quality degradation
+  8. Service instability
+  9. Privacy policy changes
+  10. Vendor lock-in
+  11. Tool deprecation
+  12. Emerging alternatives
+
+  Input: the radar documents from this round (P1-P6).
+
+  Output as Markdown:
+
+  # Risk and Alternatives Report
+
+  ## 1. Critical Risks
+
+  Each item: risk title, affected tool/model/workflow, what happened, severity (1-10), probability (1-10), practical impact, recommended action, backup option, evidence/source, score (1-10).
+
+  ## 2. Vendor Dependency Map
+
+  Table: dependency, current use, risk, alternative, action.
+
+  ## 3. Cost Risk
+
+  ## 4. Availability Risk
+
+  ## 5. Quality Risk
+
+  ## 6. Backup Plan
+
+  请用中文输出完整报告。
+output: "output/practical_ai_intelligence/{date}/08_risk_and_alternatives.md"

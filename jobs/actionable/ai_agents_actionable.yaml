@@ -1,0 +1,26 @@
+name: "AI Agents Actionable Research"
+description: "Turn research insights into executable plans"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - agent development
+  - multi-agent systems
+  - AI implementation
+language: "zh"
+prompt: |
+  You are a research-to-action specialist. Create an executable research plan for {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate an actionable research report in Markdown covering:
+  1. **Research Goals** - what to achieve and why
+  2. **Priority Areas** - ranked by impact and feasibility
+  3. **Action Plan** - concrete steps with timelines
+  4. **Experiments to Run** - specific experiments and expected outcomes
+  5. **Resources Needed** - tools, data, compute, expertise
+  6. **Success Metrics** - how to measure progress
+
+  Make every recommendation concrete and executable.
+output: "output/actionable/{date}_ai_agents_actionable.md"

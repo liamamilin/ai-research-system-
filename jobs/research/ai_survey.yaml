@@ -1,0 +1,26 @@
+name: "AI Landscape Survey"
+description: "Comprehensive AI domain survey - build the landscape map"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - multi-agent systems
+  - agent frameworks
+  - LLM agents
+language: "zh"
+prompt: |
+  You are a domain research expert. Conduct a comprehensive survey of {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a thorough survey report in Markdown covering:
+  1. **Domain Overview** - core definitions, scope, value proposition
+  2. **Key Concepts** - foundational concepts, terminology, taxonomy
+  3. **Major Players** - leading companies, research institutions, open-source projects
+  4. **Technology Landscape** - main technical approaches, frameworks, toolchains
+  5. **Development Stages** - history, current maturity, future trajectory
+  6. **Application Scenarios** - use cases, success stories, limitations
+
+  Provide at least 30 high-quality research items across all dimensions.
+output: "output/survey/ai_survey_{date}.md"

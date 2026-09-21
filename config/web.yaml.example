@@ -1,0 +1,30 @@
+# Web UI configuration
+# Copy to web.yaml and edit. The secret_key MUST be changed in production.
+
+server:
+  host: "127.0.0.1"           # bind 0.0.0.0 only behind a reverse proxy
+  port: 8765
+  base_url: "http://127.0.0.1:8765"
+
+auth:
+  secret_key: "CHANGE_ME_TO_A_LONG_RANDOM_STRING"
+  access_token_minutes: 15
+  refresh_token_days: 7
+  cookie_secure: false        # set true in production (HTTPS)
+  cookie_samesite: "strict"
+
+cors:
+  enabled: true
+  origins:
+    - "http://localhost:5173"  # Vite dev server
+
+rate_limit:
+  login_per_minute: 5
+  job_run_per_minute: 10
+
+paths:
+  jobs_dir: "jobs"
+  config_dir: "config"
+  output_dir: "output"
+  state_dir: "state"
+  logs_dir: "logs"

@@ -1,0 +1,33 @@
+# ── Actionable Research Template ──
+# Copy to jobs/actionable/ and customize.
+# Converts research insights into executable plans (~10-15 min).
+
+name: "<Topic> Action Plan"
+description: "Turn <topic> research into executable action plan"
+enabled: false
+keywords:
+  - <keyword1>
+  - <keyword2>
+  - <keyword3>
+language: "zh"
+schedule:
+  type: "manual"
+runtime:
+  timeout_seconds: 3600
+  skip_if_running: true
+prompt: |
+  You are a research-to-action specialist. Create an executable plan for {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate an actionable report in Markdown covering:
+  1. **Goals** - specific, measurable objectives (3-5)
+  2. **Priority Matrix** - ranked by impact × feasibility
+  3. **Action Plan** - concrete steps with timelines (phased)
+  4. **Experiments** - specific experiments with hypotheses and expected outcomes
+  5. **Resources** - tools, data, compute, expertise needed
+  6. **Success Metrics** - KPIs and stopping criteria
+
+  Every recommendation must be specific enough to act on immediately.
+output: "output/actionable/{date}_<topic>_actionable.md"

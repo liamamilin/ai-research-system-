@@ -1,0 +1,22 @@
+name: "Daily AI Agents"
+description: "Daily AI agents news and developments"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - multi-agent systems
+  - agent frameworks
+language: "zh"
+prompt: |
+  You are a research analyst. Search for the latest news and developments about {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a concise daily report in Markdown covering:
+  1. Top stories and breaking news (last 24 hours)
+  2. Important releases and updates
+  3. Key insights and trends
+
+  Format as a clean Markdown report with sections and bullet points.
+output: "output/daily/{date}_daily_ai_agents.md"

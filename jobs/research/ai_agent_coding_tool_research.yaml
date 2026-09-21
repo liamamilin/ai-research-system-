@@ -1,0 +1,30 @@
+# ── Comprehensive Survey Template ──
+# Copy to jobs/research/ and customize.
+# Deep research (~10-15 min), builds a domain landscape map.
+
+name: "AI Agent coding tool Survey"
+description: "Comprehensive AI Agent coding tool domain survey"
+enabled: true
+keywords:
+  - AI coding tool
+  - claude code
+  - opencode
+  - qwen coding CLI
+  - etc.....
+language: "zh"
+prompt: |
+  You are a domain research expert. Conduct a comprehensive survey of {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a thorough survey report in Markdown covering:
+  1. **Domain Overview** - core definitions, scope, value proposition
+  2. **Key Concepts** - foundational concepts, terminology, taxonomy (10-15 items)
+  3. **Major Players** - leading companies, research institutions, open-source projects (8-10)
+  4. **Technology Landscape** - main technical branches, frameworks, toolchains
+  5. **Development Stages** - history, current maturity, future trajectory
+  6. **Application Scenarios** - use cases, success stories, limitations
+
+  Provide at least 30 high-quality research items. Build a complete domain map.
+output: "output/survey/{date}_ai_agent_coding_tools_research_survey.md"

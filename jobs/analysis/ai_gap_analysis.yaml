@@ -1,0 +1,25 @@
+name: "AI Agents Gap Analysis"
+description: "Identify unsolved problems, gaps, and opportunities in AI agents"
+enabled: true
+keywords:
+  - AI agents gaps
+  - autonomous agents limitations
+  - multi-agent challenges
+  - agent research gaps
+  - unsolved AI problems
+language: "zh"
+prompt: |
+  You are an innovation researcher. Identify gaps and opportunities in {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a gap analysis report in Markdown covering:
+  1. **Unsolved Problems** - what hasn't been addressed yet
+  2. **Current Limitations** - weaknesses in existing solutions
+  3. **White Space** - unexplored areas and blind spots
+  4. **Opportunity Areas** - high-potential directions
+  5. **Innovation Entry Points** - where to start
+
+  This is the innovation funnel - focus on what's missing, not what exists.
+output: "output/AI_Agents_gap_analysis_{date}.md"

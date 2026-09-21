@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.AI_research/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# macOS
+.DS_Store
+
+# Logs
+logs/
+
+# State (locks + run records)
+state/
+
+# Output
+output/
+
+# Temp
+*.tmp
+*.bak
+
+# Node
+node_modules/
+ui/dist/
+
+# Test caches
+.pytest_cache/
+.mypy_cache/
+
+# Environment / Secrets
+.env
+.env.local
+secrets/

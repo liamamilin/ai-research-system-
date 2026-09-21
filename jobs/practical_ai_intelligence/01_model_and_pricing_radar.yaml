@@ -1,0 +1,141 @@
+name: "Model and Pricing Radar"
+description: "Monitor new models, API pricing, token/coding plans, and cost changes"
+enabled: true
+keywords:
+  - model pricing
+  - API cost
+  - token plan
+  - coding plan
+  - model capability
+  - LLM pricing
+  - Cursor plan
+  - Windsurf pricing
+  - Claude Code token
+  - coding CLI pricing
+  - Codex plan
+  - opencode pricing
+  - AI coding subscription
+language: "zh"
+schedule:
+  type: "daily"
+  time: "08:00"
+  timezone: "Asia/Shanghai"
+runtime:
+  timeout_seconds: 3600
+  skip_if_running: true
+prompt: |
+  重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。
+
+  当前日期：{date}。仅报告在 {date_7d_ago} 之后首次发布的信息。
+
+  每条发现必须包含：
+  - 发布日期（必须在 {date_7d_ago} 之后）
+  - 证据来源 URL
+  - 内容描述
+  如果日期无法确认，标注「[发布日期未知]」并说明原因。
+
+  You are Model, Pricing, and Coding Plan Intelligence Agent.
+
+  你的任务分为两大板块：(A) 模型与 API 定价情报, (B) AI Coding Plan 情报。
+
+  ======== A. 模型与 API 定价情报 ========
+
+  搜集并筛选会影响用户模型选择、API 成本、agent pipeline 成本结构的信息。
+
+  重点关注提供方：
+  - DeepSeek Flash / Pro / V3
+  - OpenAI (GPT-4o, o3, o4-mini 等)
+  - Claude / Anthropic (Sonnet, Haiku, Opus)
+  - Gemini (Flash, Pro, Ultra)
+  - Qwen (Max, Plus, Turbo)
+  - Kimi
+  - Grok / xAI
+  - Mistral
+  - 其他新出现的重要模型
+
+  关键监测领域：
+  1. 新模型发布及能力变化
+  2. API 价格变化（input, output, cache hit/miss, batch）
+  3. 长上下文定价
+  4. 免费额度 / 试用额度 / 促销码
+  5. 限流 / 配额 / 上下文长度变化
+  6. 价格未同步、隐藏限制、计费坑
+  7. 模型降质（能力回退、benchmark 下降）
+
+  ======== B. AI Coding Plan 情报 ========
+
+  此部分为本期新增重点。搜集所有与 AI 编程工具、coding CLI、IDE agent 相关的定价、套餐、额度信息。
+
+  需要覆盖的 coding 工具：
+  - **Cursor**: Pro ($20/mo) vs Business ($40/mo) 定价变化、使用限额、额外功能
+  - **Windsurf**: Flow Action 定价、Pro/Pro Ultimate 套餐变化、额度政策
+  - **Claude Code**: Anthropic 的 token plan、API 用量计费、Max 套餐
+  - **Codex / Codex CLI**: OpenAI 的 coding agent 定价、token 消耗
+  - **GitHub Copilot**: Individual ($10/mo) vs Business ($19/mo) vs Enterprise 定价变化、功能差异
+  - **opencode**: 定价 model、token plan、CLI 使用成本
+  - **Qwen Code**: 定价、API 额度
+  - **Command Code**: Agent 模式定价
+  - **Aider**: 仅 API cost 模式（无订阅费），关注模型路由成本
+  - **Cline / Roo Code**: API key 模式成本、提供商选择
+  - **其他**：新出现的 coding CLI 或 Agent 工具及其定价模型
+
+  每个 coding 工具需要搜集：
+  - 订阅价格（月付/年付）
+  - 使用额度（请求数/token 数/补全次数）
+  - 超额费用
+  - 免费版限制
+  - 团队/企业定价
+  - 近期价格变动
+  - 与竞品的价格对比
+  - 性价比分析建议
+
+  ======== 通用筛选原则 ========
+
+  时间范围：优先关注最近 2 天的信息。
+  忽略超过 7 天的信息，除非是重要的更正或遗漏。
+
+  只保留会影响以下决策的信息：
+  - 是否切换模型
+  - 是否调整模型路由
+  - 是否购买/取消某个 coding plan
+  - 是否将某模型用于 deep report / coding agent
+  - 是否值得做内容推荐
+
+  ======== 输出格式 ========
+
+  # Model, Pricing and Coding Plan Radar
+
+  ## 1. High-Signal Model Updates
+
+  每条：标题、分类、提供商、变更内容、旧/新情况、实际影响、成本影响、推荐行动、评分(1-10)、证据来源。
+
+  ## 2. AI Coding Plan Comparison
+
+  | 工具 | 套餐 | 月价 | 年度价 | 额度限制 | 超额政策 | 性价比评价 | 推荐 |
+  |------|------|------|--------|----------|----------|-----------|------|
+
+  每条 Plan 需要标注：价格变动时间、与上月对比趋势、最佳适用场景。
+
+  ## 3. Coding Plan 详细分析
+
+  每个工具单独一段，包含：
+  - 价格概览
+  - 与竞品对比
+  - 推荐/不推荐理由
+
+  ## 4. Pricing Comparison Notes
+
+  模型 API 价格对比表。
+
+  ## 5. Model Routing Implications
+
+  说明这些变化如何影响模型路由决策。
+
+  ## 6. Test Candidates
+
+  列出值得测试的模型或套餐，及测试方法。
+
+  ## 7. Ignore / Low-Signal Items
+
+  请用中文输出完整报告。
+output: "output/practical_ai_intelligence/{date}/01_model_and_pricing_radar.md"

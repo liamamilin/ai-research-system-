@@ -1,0 +1,28 @@
+[Unit]
+Description=AI Research Console
+Documentation=https://github.com/anomalyco/Base_CodingCLi
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/opt/ai-research
+
+# Python environment
+Environment=PATH=/opt/ai-research/venv/bin:/usr/local/bin:/usr/bin
+Environment=AI_RESEARCH_SECRET_KEY=your-256-bit-secret-here
+Environment=AI_RESEARCH_ENV=production
+Environment=PYTHONUNBUFFERED=1
+
+# App
+ExecStart=/opt/ai-research/venv/bin/python run_web.py serve
+Restart=on-failure
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

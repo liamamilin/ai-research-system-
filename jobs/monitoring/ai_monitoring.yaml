@@ -1,0 +1,24 @@
+name: "AI Domain Monitoring"
+description: "Continuous intelligence tracking for AI domain"
+enabled: true
+keywords:
+  - AI agents
+  - autonomous agents
+  - multi-agent systems
+  - LLM agents
+  - AI research
+language: "zh"
+prompt: |
+  You are an intelligence analyst. Monitor the latest developments in {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a monitoring report in Markdown covering:
+  1. **New Developments** - latest papers, releases, announcements
+  2. **Signal Detection** - emerging trends, shifts, anomalies
+  3. **Key Updates** - updates from major players and projects
+  4. **Alert Items** - noteworthy changes requiring attention
+
+  Focus on the last 24 hours. Be concise and signal-focused.
+output: "output/monitoring/ai_monitoring_{date}.md"

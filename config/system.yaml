@@ -1,0 +1,111 @@
+# System configuration
+
+logging:
+  level: "INFO"
+  file: "logs/ai_research.log"
+
+# ---------------------------------------------------------------------------
+# LLM API (OpenAI-compatible chat completions). No CLI dependency.
+# opencode go:  https://opencode.ai/zen/go/v1  (subscription; sends session
+#               id + custom user agent as required by the Go docs)
+# opencode zen: https://opencode.ai/zen/v1     (pay-as-you-go, needs credits)
+# local Ollama: http://localhost:11434/v1      (free, slower)
+# ---------------------------------------------------------------------------
+ai:
+  model: "deepseek-v4.1-flash"              # any OpenAI-compatible model id
+  base_url: "https://opencode.ai/zen/go/v1"
+  api_key_env: "LLM_API_KEY"                # env var holding the API key
+  timeout: 1800                             # per-request wall clock ceiling (s)
+  request_timeout: 600                      # single HTTP attempt (s)
+  max_tokens: 32768
+  temperature: 0.3
+  max_retries: 3
+  stream: true                              # stream report generation for live progress
+  # reasoning_content: "auto"               # auto|always|never; DeepSeek
+  #                                          # thinking mode requires echo
+  # extra_body: {}                          # provider-specific fields
+  extra_headers:
+    x-opencode-session: "ses_{session_id}"  # stable id per job conversation
+    User-Agent: "BaseCodingCLi-ResearchAgent/2.0"
+  pricing:                                # optional, for cost estimates
+    input_per_1m: 0.15                    # deepseek-v4.1-flash (Go, off-peak)
+    output_per_1m: 0.60
+  # --- local fallback example ---
+  # model: "qwen3.8:27b-mlx"
+  # base_url: "http://localhost:11434/v1"
+  # api_key_env: ""
+
+# ---------------------------------------------------------------------------
+# Web search API
+# provider: parallel (https://docs.parallel.ai) | duckduckgo (keyless)
+# ---------------------------------------------------------------------------
+search:
+  provider: "parallel"                      # parallel | tavily | brave | serper | duckduckgo
+  api_key_env: "PARALLEL_API_KEY"
+  api_key_envs:                             # per-provider keys (switch provider freely)
+    tavily: "TAVILY_API_KEY"
+    brave: "BRAVE_API_KEY"
+    serper: "SERPER_API_KEY"
+  mode: "advanced"                          # turbo | fast | basic | advanced
+  max_results: 10
+  max_chars_per_result: 3000
+  max_chars_total: 60000
+  after_date: ""                            # optional YYYY-MM-DD freshness bound
+  timeout: 60
+  fallback_provider: "duckduckgo"
+  # fallback_providers: ["tavily"]          # optional extra fallbacks in order
+
+# ---------------------------------------------------------------------------
+# Research agent
+# mode: auto (agent with pipeline fallback) | agent | pipeline
+# ---------------------------------------------------------------------------
+research:
+  mode: "auto"
+  max_rounds: 12
+  max_searches: 12
+  context_char_budget: 150000
+
+# ---------------------------------------------------------------------------
+# Monthly budget guardrail (uses ai.pricing for the cost estimate)
+# ---------------------------------------------------------------------------
+budget:
+  monthly_usd_limit: 0       # 0 = disabled; e.g. 20 for $20/month
+  warn_ratio: 0.8            # warn at 80% of the limit
+  block_pipeline: true       # refuse to start a round when over budget
+
+# ---------------------------------------------------------------------------
+# Notifications: webhook / 企业微信 / 飞书 / email (any combination).
+# Events: failed | cancelled | success | round_finished
+# ---------------------------------------------------------------------------
+notifications:
+  enabled: false
+  notify_on: ["failed", "cancelled", "round_finished"]
+  timeout: 10                  # per-channel HTTP timeout (s)
+  webhook_url: ""              # Slack/Discord compatible JSON POST
+  wecom:                       # 企业微信群机器人
+    enabled: false
+    webhook_url: ""            # https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...
+  feishu:                      # 飞书群机器人
+    enabled: false
+    webhook_url: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/...
+  email:
+    enabled: false
+    smtp_host: ""
+    smtp_port: 465
+    smtp_user: ""
+    smtp_password_env: "SMTP_PASSWORD"   # password read from .env / environment
+    from_addr: ""
+    to_addrs: []
+    use_ssl: true              # false = STARTTLS on smtp_port (usually 587)
+
+defaults:
+  output_dir: "output"
+
+# ---------------------------------------------------------------------------
+# Optional report cleanup pass (disabled by default)
+# ---------------------------------------------------------------------------
+extraction:
+  enabled: false
+  model: "deepseek-v4-flash"
+  base_url: "https://opencode.ai/zen/v1"
+  api_key_env: "EXTRACTION_API_KEY"

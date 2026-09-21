@@ -1,0 +1,35 @@
+# ── Practice / Application Research Template ──
+# Copy to jobs/practice/ and customize.
+# Searches for real-world applications and implementations (~5-10 min).
+
+name: "<Topic> Practice"
+description: "Search for practical <topic> applications and implementations"
+enabled: false
+keywords:
+  - <keyword1> applications
+  - <keyword2> implementation
+  - <keyword3> case studies
+  - <keyword4> deployment
+language: "zh"
+schedule:
+  type: "weekly"
+  time: "10:00"
+  timezone: "Asia/Shanghai"
+runtime:
+  timeout_seconds: 3600
+  skip_if_running: true
+prompt: |
+  You are a practical AI researcher. Search for real-world applications of {name}.
+
+  Keywords: {keywords}
+  Language: {language}
+
+  Generate a practice-oriented report in Markdown covering:
+  1. **Real Applications** - deployed use cases with concrete examples
+  2. **Implementation Methods** - technical approaches, architectures
+  3. **Frameworks & Tools** - software, platforms, infrastructure used
+  4. **Challenges & Solutions** - problems encountered and how they were solved
+  5. **Resource Requirements** - what's needed to replicate
+
+  Focus on concrete, practical, actionable information. Include source links.
+output: "output/practice/{date}_<topic>_practice.md"

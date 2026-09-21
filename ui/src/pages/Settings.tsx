@@ -1,0 +1,505 @@
+import { useEffect, useState } from "react";
+import { api } from "@/api/client";
+import { useAuthStore } from "@/lib/auth-store";
+import { cn } from "@/lib/utils";
+import { YamlEditor } from "@/components/YamlEditor";
+import { Trash2 } from "lucide-react";
+
+type SettingsTab = "system" | "users" | "audit" | "logs";
+
+export function SettingsPage() {
+  const user = useAuthStore((s) => s.user);
+  const [tab, setTab] = useState<SettingsTab>("system");
+  const isAdmin = user?.role === "admin";
+
+  if (!isAdmin) {
+    return (
+      <div className="card p-6 text-center text-text-muted text-sm">
+        只有 admin 可以访问设置
+      </div>
+    );
+  }
+
+  const tabs: { key: SettingsTab; label: string }[] = [
+    { key: "system", label: "系统配置" },
+    { key: "users", label: "用户管理" },
+    { key: "audit", label: "审计日志" },
+    { key: "logs", label: "运行日志" },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <h1 className="text-lg font-semibold flex-1">设置</h1>
+      </div>
+
+      <div className="flex gap-0 border-b border-border">
+        {tabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "px-4 py-2 text-sm border-b-2 transition",
+              tab === t.key
+                ? "border-accent text-text"
+                : "border-transparent text-text-muted hover:text-text"
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "system" && <SystemConfig />}
+      {tab === "users" && <UserManagement />}
+      {tab === "audit" && <AuditLog />}
+      {tab === "logs" && <GlobalLogs />}
+    </div>
+  );
+}
+
+// --- System Config ---
+
+function SystemConfig() {
+  const [content, setContent] = useState("");
+  const [mtime, setMtime] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
+
+  const load = () => {
+    setLoading(true);
+    setError("");
+    setConflict(false);
+    api<any>("/api/config/system")
+      .then((data) => {
+        setContent(data.content);
+        setMtime(typeof data.mtime === "number" ? data.mtime : null);
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage("");
+    setError("");
+    setConflict(false);
+    try {
+      const resp = await api<{ ok: boolean; mtime: number }>("/api/config/system", {
+        method: "PUT",
+        body: { content, expected_mtime: mtime },
+      });
+      if (typeof resp?.mtime === "number") setMtime(resp.mtime);
+      setMessage("保存成功");
+    } catch (err: any) {
+      if (err?.code === "conflict") {
+        setConflict(true);
+        setError("配置已被外部修改，当前版本已过期");
+      } else {
+        setError(err.message || "保存失败");
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const resp = await api<any>("/api/config/test-connection", { method: "POST" });
+      setTestResult(resp);
+    } catch (err: any) {
+      setTestResult({ error: err.message || "测试失败" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (loading) return <div className="text-sm text-text-muted">加载中...</div>;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={handleSave} disabled={saving} className="btn btn-primary">
+          {saving ? "保存中..." : "保存"}
+        </button>
+        <button onClick={handleTest} disabled={testing} className="btn text-xs">
+          {testing ? "测试中..." : "测试连接"}
+        </button>
+        {conflict && (
+          <button onClick={load} className="btn text-xs">
+            重新加载
+          </button>
+        )}
+        {message && <span className="text-xs text-success">{message}</span>}
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </div>
+
+      {testResult && (
+        <div className="text-xs space-y-1 bg-bg-card border border-border rounded-md px-3 py-2">
+          {testResult.error && <div className="text-danger">✗ {testResult.error}</div>}
+          {testResult.llm && (
+            <div className={testResult.llm.ok ? "text-success" : "text-danger"}>
+              {testResult.llm.ok ? "✓" : "✗"} LLM [{testResult.llm.model}]
+              {testResult.llm.ok
+                ? ` ${testResult.llm.latency_ms}ms — "${testResult.llm.reply}"`
+                : ` ${testResult.llm.error}`}
+            </div>
+          )}
+          {testResult.search && (
+            <div className={testResult.search.ok ? "text-success" : "text-danger"}>
+              {testResult.search.ok ? "✓" : "✗"} 搜索 [{testResult.search.provider}]
+              {testResult.search.ok
+                ? ` ${testResult.search.latency_ms}ms — ${testResult.search.results} 条结果`
+                : ` ${testResult.search.error}`}
+            </div>
+          )}
+        </div>
+      )}
+
+      <YamlEditor value={content} onChange={setContent} height="calc(100vh - 340px)" />
+    </div>
+  );
+}
+
+// --- User Management ---
+
+function UserManagement() {
+  const me = useAuthStore((s) => s.user);
+  const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [newUser, setNewUser] = useState({ username: "", password: "", role: "viewer" });
+  const [message, setMessage] = useState("");
+
+  const fetchUsers = () => {
+    setLoading(true);
+    api<any[]>("/api/users")
+      .then(setUsers)
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { fetchUsers(); }, []);
+
+  const handleCreate = async () => {
+    setMessage("");
+    try {
+      await api("/api/users", { method: "POST", body: newUser });
+      setNewUser({ username: "", password: "", role: "viewer" });
+      setShowForm(false);
+      fetchUsers();
+    } catch (err: any) {
+      setMessage(err.message || "创建失败");
+    }
+  };
+
+  const handleDelete = async (userId: number, username: string) => {
+    if (!window.confirm(`确定删除用户 '${username}'?`)) return;
+    try {
+      await api(`/api/users/${userId}`, { method: "DELETE" });
+      fetchUsers();
+    } catch (err: any) {
+      setMessage(err.message || "删除失败");
+    }
+  };
+
+  const patchUser = async (userId: number, payload: Record<string, unknown>, okMsg = "") => {
+    setMessage("");
+    try {
+      await api(`/api/users/${userId}`, { method: "PATCH", body: payload });
+      if (okMsg) setMessage(okMsg);
+      fetchUsers();
+    } catch (err: any) {
+      setMessage(err.message || "操作失败");
+    }
+  };
+
+  const handleResetPassword = (userId: number, username: string) => {
+    const pwd = window.prompt(`为用户 '${username}' 设置新密码（≥6 位）:`);
+    if (!pwd) return;
+    patchUser(userId, { password: pwd }, `已重置 ${username} 的密码，其会话已下线`);
+  };
+
+  const handleForceLogout = (userId: number, username: string) => {
+    if (!window.confirm(`强制 '${username}' 所有会话下线？`)) return;
+    patchUser(userId, { revoke_sessions: true }, `已下线 ${username} 的所有会话`);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <button onClick={() => setShowForm(!showForm)} className="btn btn-primary text-xs">
+          {showForm ? "取消" : "+ 创建用户"}
+        </button>
+        {message && <span className="text-xs text-text-muted">{message}</span>}
+      </div>
+
+      {showForm && (
+        <div className="card p-3 space-y-2">
+          <div className="flex gap-2">
+            <input className="input flex-1" placeholder="用户名" value={newUser.username}
+              onChange={(e) => setNewUser({ ...newUser, username: e.target.value })} />
+            <input className="input flex-1" type="password" placeholder="密码 (>=6字符)" value={newUser.password}
+              onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} />
+            <select className="input w-28" value={newUser.role}
+              onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}>
+              <option value="viewer">viewer</option>
+              <option value="editor">editor</option>
+              <option value="admin">admin</option>
+            </select>
+            <button onClick={handleCreate} className="btn btn-primary">创建</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-sm text-text-muted">加载中...</div>
+      ) : (
+        <div className="card divide-y divide-border text-sm">
+          <div className="px-4 py-2 flex items-center gap-3 text-xs text-text-muted uppercase">
+            <span className="flex-1">用户名</span>
+            <span className="w-24">角色</span>
+            <span className="w-32">最后登录</span>
+            <span className="w-48">操作</span>
+          </div>
+          {users.map((u) => {
+            const isSelf = me?.id === u.id;
+            return (
+              <div key={u.id} className={cn("px-4 py-2.5 flex items-center gap-3", u.disabled && "opacity-50")}>
+                <span className="flex-1 font-mono flex items-center gap-2">
+                  {u.username}
+                  {isSelf && <span className="badge border border-accent text-accent text-xs">我</span>}
+                  {u.disabled && <span className="badge border border-warning text-warning text-xs">已禁用</span>}
+                </span>
+                <select
+                  className="input w-24 text-xs py-1"
+                  value={u.role}
+                  disabled={isSelf}
+                  onChange={(e) => patchUser(u.id, { role: e.target.value }, `已更新 ${u.username} 的角色`)}
+                >
+                  <option value="viewer">viewer</option>
+                  <option value="editor">editor</option>
+                  <option value="admin">admin</option>
+                </select>
+                <span className="w-32 text-text-muted text-xs">
+                  {u.last_login_at?.slice(0, 19)?.replace("T", " ") || "-"}
+                </span>
+                <div className="w-48 flex items-center gap-1">
+                  <button
+                    onClick={() => patchUser(u.id, { disabled: !u.disabled },
+                      u.disabled ? `已启用 ${u.username}` : `已禁用 ${u.username}`)}
+                    disabled={isSelf}
+                    className="btn p-1 text-xs"
+                    title={u.disabled ? "启用" : "禁用"}
+                  >
+                    {u.disabled ? "启用" : "禁用"}
+                  </button>
+                  <button
+                    onClick={() => handleResetPassword(u.id, u.username)}
+                    className="btn p-1 text-xs"
+                    title="重置密码"
+                  >
+                    重置密码
+                  </button>
+                  <button
+                    onClick={() => handleForceLogout(u.id, u.username)}
+                    className="btn p-1 text-xs"
+                    title="强制下线"
+                  >
+                    下线
+                  </button>
+                  <button
+                    onClick={() => handleDelete(u.id, u.username)}
+                    disabled={isSelf}
+                    className="btn p-1 text-danger"
+                    title="删除"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Audit Log ---
+
+function AuditLog() {
+  const [entries, setEntries] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState("");
+
+  useEffect(() => {
+    api<{ entries: any[] }>("/api/audit?limit=500")
+      .then((data) => setEntries(data.entries))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const needle = filter.trim().toLowerCase();
+  const visible = needle
+    ? entries.filter((e) =>
+        [e.action, e.user, e.target, e.result, e.ip]
+          .filter(Boolean)
+          .some((v: unknown) => String(v).toLowerCase().includes(needle))
+      )
+    : entries;
+
+  return (
+    <div className="space-y-3">
+      <input
+        className="input max-w-xs text-xs"
+        placeholder="筛选（操作/用户/目标/结果/IP）..."
+        value={filter}
+        onChange={(e) => setFilter(e.target.value)}
+      />
+      {loading ? (
+        <div className="text-sm text-text-muted">加载中...</div>
+      ) : visible.length === 0 ? (
+        <div className="card p-4 text-center text-text-muted text-sm">
+          {entries.length === 0 ? "暂无审计日志" : "无匹配记录"}
+        </div>
+      ) : (
+        <div className="card overflow-x-auto">
+          <table className="min-w-full text-xs">
+            <thead>
+              <tr className="border-b border-border text-text-muted">
+                <th className="text-left px-3 py-2 font-medium">时间</th>
+                <th className="text-left px-3 py-2 font-medium">操作</th>
+                <th className="text-left px-3 py-2 font-medium">用户</th>
+                <th className="text-left px-3 py-2 font-medium">目标</th>
+                <th className="text-left px-3 py-2 font-medium">结果</th>
+                <th className="text-left px-3 py-2 font-medium">IP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((e, i) => (
+                <tr key={i} className="border-b border-border hover:bg-bg-hover">
+                  <td className="px-3 py-2 whitespace-nowrap">{e.ts?.slice(0, 19)?.replace("T", " ")}</td>
+                  <td className="px-3 py-2 whitespace-nowrap font-mono">{e.action}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{e.user || "-"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{e.target || "-"}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <span className={cn("badge",
+                      e.result === "success" ? "text-success" :
+                      e.result === "failed" ? "text-danger" : "text-warning"
+                    )}>{e.result}</span>
+                  </td>
+                  <td className="px-3 py-2 text-text-muted">{e.ip || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Global Logs ---
+
+function GlobalLogs() {
+  const [lines, setLines] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [follow, setFollow] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api<{ lines: string[] }>("/api/logs/global?lines=500")
+        .then((data) => { if (!cancelled) setLines(data.lines); })
+        .catch(() => {})
+        .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    if (!follow) return () => { cancelled = true; };
+    const timer = window.setInterval(load, 5000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [follow]);
+
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer">
+        <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+        自动刷新（5s）
+      </label>
+      {loading ? (
+        <div className="text-sm text-text-muted">加载中...</div>
+      ) : lines.length === 0 ? (
+        <div className="card p-4 text-center text-text-muted text-sm">暂无日志</div>
+      ) : (
+        <pre className="card p-3 text-xs font-mono leading-relaxed max-h-[70vh] overflow-y-auto bg-[#0d1117]">
+          {lines.map((l, i) => (
+            <div key={i} className="whitespace-pre-wrap break-all text-text-muted">{l}</div>
+          ))}
+        </pre>
+      )}
+
+      {/* Server management */}
+      <div className="border-t border-border pt-4 mt-6">
+        <h3 className="text-sm font-medium mb-2">服务器管理</h3>
+        <div className="card p-3 flex items-center gap-3">
+          <div className="flex-1 text-sm text-text-muted">
+            关闭服务器会断开所有用户连接。仅在维护或升级时使用。
+          </div>
+          <ShutdownButton />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShutdownButton() {
+  const [confirming, setConfirming] = useState(false);
+  const [shuttingDown, setShuttingDown] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleShutdown = async () => {
+    setShuttingDown(true);
+    setError("");
+    try {
+      await api("/api/deploy/shutdown", { method: "POST" });
+      // Server might not respond after this
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 2000);
+    } catch (err: any) {
+      setError(err.message || "关闭失败");
+      setShuttingDown(false);
+    }
+  };
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-danger">确认关闭？</span>
+        <button onClick={handleShutdown} disabled={shuttingDown} className="btn btn-danger text-xs">
+          {shuttingDown ? "关闭中..." : "确认关闭"}
+        </button>
+        <button onClick={() => setConfirming(false)} className="btn text-xs">取消</button>
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </div>
+    );
+  }
+
+  return (
+    <button onClick={() => setConfirming(true)} className="btn btn-danger text-xs">
+      关闭服务器
+    </button>
+  );
+}
