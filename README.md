@@ -117,6 +117,11 @@ python run.py --list-enabled       # List enabled jobs
 python run.py -v job_name          # Verbose mode
 python run.py -t 3600 job_name     # Timeout override (seconds)
 python run.py --validate           # Validate configs
+
+# Export structured JSON artifacts for intelligence rounds
+python scripts/export_round_artifacts.py              # latest round
+python scripts/export_round_artifacts.py 2026-09-19   # one round
+python scripts/export_round_artifacts.py --all        # every round
 ```
 
 ### macOS 启动器 App
@@ -153,7 +158,7 @@ python run_web.py reindex                  # Force re-scan output/ for search in
 | Feature | Description |
 |---------|-------------|
 | Dashboard | Job statistics, recent runs, token usage & estimated cost, 月度预算进度 |
-| Rounds board | 情报轮次看板：10 阶段状态、一键运行、失败阶段补跑、历史轮次 |
+| Rounds board | 情报轮次看板：10 阶段状态、一键运行、失败阶段补跑、历史轮次；每轮自动生成 `action_items.json` / `watchlist.json` / `sources.json` 结构化产物（失败可手动补跑导出脚本） |
 | Account | 修改密码、会话管理、API Token（脚本/CI 用 Bearer 调用，免 CSRF）；管理员可改角色/禁用/重置密码/强制下线 |
 | Notifications | 通知（失败/取消/完成/轮次完成）：Webhook（Slack/Discord 兼容）、企业微信、飞书、邮件 |
 | Job management | Browse jobs, view/edit YAML config (Monaco editor), trigger/cancel runs |
@@ -209,7 +214,8 @@ output: "output/daily/{date}_daily_ai_agents.md"
 │   ├── state.py            # Job run state + history tracking
 │   ├── lock.py             # File-based lock (prevents concurrent runs)
 │   ├── errors.py           # Shared exception types
-│   └── extractor.py        # Optional report cleanup pass
+│   ├── extractor.py        # Optional report cleanup pass
+│   └── artifacts.py        # Round JSON artifacts (actions/watchlist/sources)
 │
 ├── web/                    # Web backend (FastAPI)
 │   ├── server.py           # App entry, CORS, lifespan, SPA serving
@@ -240,6 +246,7 @@ output: "output/daily/{date}_daily_ai_agents.md"
 │   └── web.yaml            # Server host, port, JWT secret, CORS
 │
 ├── output/                 # Generated reports (indexed by FTS5)
+│   └── practical_ai_intelligence/<date>/   # 10 docs + action_items/watchlist/sources JSON
 ├── state/                  # Job state, history, user DB, reports index
 ├── logs/                   # App log, audit log, job-run logs
 └── utils/                  # Logger setup

@@ -273,6 +273,21 @@ def _notify_round(state: dict, results: dict[str, str]) -> None:
         logger.debug("Round notification skipped: %s", exc)
 
 
+def _export_round_artifacts(state: dict, config_dir: str) -> None:
+    """Best-effort JSON artifacts (actions, watchlist, sources) for a round."""
+    try:
+        from core.artifacts import export_round_artifacts
+        from core.config import load_system_config
+
+        output_dir = (load_system_config(config_dir).get("defaults") or {}).get(
+            "output_dir", "output")
+        round_dir = os.path.join(output_dir, PIPELINE_DIR, state["date"])
+        if export_round_artifacts(round_dir, date=state["date"]):
+            logger.info("Round %s artifacts exported", state["date"])
+    except Exception as exc:  # noqa: BLE001 - artifacts are best-effort
+        logger.warning("Round %s artifact export failed: %s", state["date"], exc)
+
+
 def _stages_needing_rerun(file_stages: dict, previous: dict) -> list[str]:
     """Stages to re-run: output missing, or last attempt truly failed.
 
@@ -448,6 +463,7 @@ def _run_round(state: dict, config_dir: str, jobs_dir: str, concurrency: int,
 
         _persist(state)
         _notify_round(state, results)
+        _export_round_artifacts(state, config_dir)
         logger.info("Round %s finished: %s (failed: %s)",
                     state["date"], state["status"], ", ".join(failed) or "none")
     except Exception as exc:  # noqa: BLE001 - never kill the server
