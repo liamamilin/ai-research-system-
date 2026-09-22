@@ -6,7 +6,7 @@ import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
-from core import report_meta
+from core import artifacts, report_meta
 from web import audit
 from web.deps import require_editor, require_viewer
 from web.models import ApiError
@@ -14,6 +14,17 @@ from web.runner import pipeline
 from web.settings import get_settings
 
 router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
+
+
+def _round_artifacts(date: str, output_dir: str) -> list[dict]:
+    """Existing JSON artifacts of a round (name + size), for downloads."""
+    round_dir = os.path.join(output_dir, pipeline.PIPELINE_DIR, date)
+    found = []
+    for name in (artifacts.ACTION_FILE, artifacts.WATCHLIST_FILE, artifacts.SOURCES_FILE):
+        path = os.path.join(round_dir, name)
+        if os.path.isfile(path):
+            found.append({"name": name, "size": os.path.getsize(path)})
+    return found
 
 
 def _round_payload(date: str) -> dict:
@@ -29,6 +40,7 @@ def _round_payload(date: str) -> dict:
         "total": len(stages),
         "tokens_total": sum(tokens.values()),
         "stages": stages,
+        "artifacts": _round_artifacts(date, settings.paths.output_dir),
         "live": pipeline.get_round_state(date),
     }
 

@@ -76,10 +76,10 @@ def raw_report(path: str, user=Depends(require_viewer)):
             detail=ApiError.make("not_found", "文件不存在"),
         )
 
-    if not full_path.endswith((".md", ".mdx")):
+    if not full_path.endswith((".md", ".mdx", ".json")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=ApiError.make("invalid_extension", "只支持 .md / .mdx 文件"),
+            detail=ApiError.make("invalid_extension", "只支持 .md / .mdx / .json 文件"),
         )
 
     try:

@@ -153,12 +153,18 @@ export interface RoundStage {
   status: string; // done | missing | running | success | failed | cancelled | pending | skipped
 }
 
+export interface RoundArtifact {
+  name: string;
+  size: number;
+}
+
 export interface Round {
   date: string;
   done: number;
   total: number;
   tokens_total?: number;
   stages: RoundStage[];
+  artifacts?: RoundArtifact[];
   live: {
     date: string;
     status: string;
@@ -237,8 +243,14 @@ export async function listApiTokens(): Promise<{ tokens: ApiToken[] }> {
   return api("/api/auth/tokens");
 }
 
-export async function createApiToken(name: string): Promise<ApiToken & { token: string }> {
-  return api("/api/auth/tokens", { method: "POST", body: { name } });
+export async function createApiToken(
+  name: string,
+  expiresDays?: number,
+): Promise<ApiToken & { token: string }> {
+  return api("/api/auth/tokens", {
+    method: "POST",
+    body: expiresDays ? { name, expires_days: expiresDays } : { name },
+  });
 }
 
 export async function revokeApiToken(id: number): Promise<{ ok: boolean }> {

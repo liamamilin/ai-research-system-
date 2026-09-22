@@ -40,8 +40,15 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const handleCreateToken = async () => {
     const name = window.prompt("Token 名称（便于识别用途，如 ci-bot）:", "api-token");
     if (!name) return;
+    const daysRaw = window.prompt("有效期天数（留空 = 永不过期）:", "");
+    if (daysRaw === null) return;
+    const days = daysRaw.trim() ? Number(daysRaw.trim()) : undefined;
+    if (days !== undefined && (!Number.isInteger(days) || days <= 0)) {
+      setErr("有效期需为正整数天数");
+      return;
+    }
     try {
-      const created = await createApiToken(name);
+      const created = await createApiToken(name, days);
       setNewToken(created.token);
       const d = await listApiTokens().catch(() => null);
       if (d) setTokens(d.tokens || []);
@@ -180,6 +187,11 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   <span className="text-text-muted">{t.name}</span>
                   <span className="text-text-muted">
                     {t.last_used_at ? `used ${String(t.last_used_at).slice(0, 10)}` : "未使用"}
+                  </span>
+                  <span className="text-text-muted">
+                    {t.expires_at
+                      ? `至 ${new Date(t.expires_at * 1000).toLocaleDateString()}`
+                      : "永不过期"}
                   </span>
                   <button
                     onClick={() => handleRevokeToken(t.id)}

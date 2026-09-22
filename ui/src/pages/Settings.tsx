@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
-import { YamlEditor } from "@/components/YamlEditor";
 import { Trash2 } from "lucide-react";
+
+const YamlEditor = lazy(() => import("@/components/YamlEditor").then(m => ({ default: m.YamlEditor })));
 
 type SettingsTab = "system" | "users" | "audit" | "logs";
 
@@ -168,7 +169,9 @@ function SystemConfig() {
         </div>
       )}
 
-      <YamlEditor value={content} onChange={setContent} height="calc(100vh - 340px)" />
+      <Suspense fallback={<div className="text-sm text-text-muted py-6 text-center">加载编辑器...</div>}>
+        <YamlEditor value={content} onChange={setContent} height="calc(100vh - 340px)" />
+      </Suspense>
     </div>
   );
 }

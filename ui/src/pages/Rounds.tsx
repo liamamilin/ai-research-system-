@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { getRounds, runRound, cancelRound, retryRound, type Round } from "@/api";
+import { getRounds, getReportRaw, runRound, cancelRound, retryRound, type Round } from "@/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatTokens } from "@/lib/utils";
 import { RefreshCw, Play, Square } from "lucide-react";
@@ -107,6 +107,22 @@ export function RoundsPage() {
     }
   };
 
+  const downloadArtifact = async (date: string, name: string) => {
+    setError("");
+    try {
+      const data = await getReportRaw(`${PIPELINE_DIR}/${date}/${name}`);
+      const blob = new Blob([data.content], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${date}_${name}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "下载失败");
+    }
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -189,6 +205,16 @@ export function RoundsPage() {
                   {round.tokens_total ? (
                     <span className="text-xs text-text-muted">{formatTokens(round.tokens_total)} tok</span>
                   ) : null}
+                  {(round.artifacts || []).map((a) => (
+                    <button
+                      key={a.name}
+                      onClick={() => downloadArtifact(round.date, a.name)}
+                      className="text-xs px-1.5 py-0.5 rounded border border-border text-text-muted hover:text-text hover:bg-bg-hover transition font-mono"
+                      title={`下载 ${a.name}（${(a.size / 1024).toFixed(1)} KB）`}
+                    >
+                      {a.name.replace(/\.json$/, "")}
+                    </button>
+                  ))}
                   {roundIndex < rounds.length - 1 && (
                     <button
                       onClick={() => setCompareDate(compareDate === round.date ? null : round.date)}
