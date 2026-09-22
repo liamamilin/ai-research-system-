@@ -416,12 +416,16 @@ python run_web.py serve --reload
 # Frontend (Vite dev server, proxied to backend)
 cd ui && npm run dev
 
-# Local CI: compile + unit tests + config validation + frontend build
+# Local CI: compile + unit tests + config validation + frontend lint/tests/build
 bash scripts/check.sh
 
 # Unit tests only
 pip install -r requirements-dev.txt
 python -m pytest -q
+
+# Frontend lint + unit tests (vitest)
+cd ui && npm run lint
+cd ui && npm test
 ```
 
 ### Budget guardrail

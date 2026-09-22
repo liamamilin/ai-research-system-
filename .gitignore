@@ -32,6 +32,7 @@ output/
 # Node
 node_modules/
 ui/dist/
+*.tsbuildinfo
 
 # Test caches
 .pytest_cache/

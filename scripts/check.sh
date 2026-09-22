@@ -25,8 +25,9 @@ echo "== config validation =="
 $PY run.py --validate | tail -1
 
 if command -v npm >/dev/null 2>&1 && [ -d ui/node_modules ]; then
-    echo "== frontend type-check + build =="
-    (cd ui && npx tsc --noEmit --noUnusedLocals --noUnusedParameters && npm run build >/dev/null)
+    echo "== frontend type-check + lint + tests + build =="
+    (cd ui && npx tsc --noEmit --noUnusedLocals --noUnusedParameters \
+        && npm run lint --silent && npm test --silent && npm run build >/dev/null)
 fi
 
 echo ""
