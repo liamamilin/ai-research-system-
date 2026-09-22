@@ -102,6 +102,32 @@ def is_enabled(event: str, sys_config: Optional[dict] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _check_bot_response(body: bytes) -> None:
+    """Raise when a bot webhook reports a non-zero code in its JSON body.
+
+    WeCom and Feishu answer HTTP 200 even for rejected messages; the real
+    status lives in ``errcode`` / ``code``.
+    """
+    if not body:
+        return
+    try:
+        data = json.loads(body.decode("utf-8", "replace"))
+    except (ValueError, UnicodeDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    code = data.get("errcode", data.get("code"))
+    if code is None:
+        return
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return
+    if code != 0:
+        msg = data.get("errmsg") or data.get("msg") or ""
+        raise RuntimeError(f"webhook rejected the message: code={code} {msg}")
+
+
 def _post_json(url: str, payload: dict, timeout: int) -> bool:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
@@ -114,7 +140,8 @@ def _post_json(url: str, payload: dict, timeout: int) -> bool:
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as resp:
-        resp.read(64)
+        body = resp.read(4096)
+    _check_bot_response(body)
     return True
 
 

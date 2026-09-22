@@ -259,3 +259,53 @@ def test_send_test_reports_per_channel(monkeypatch):
 def test_send_test_disabled_configuration():
     report = notify.send_test(sys_config={"notifications": {"enabled": False}})
     assert report == {"enabled": False, "channels": [], "results": {}}
+
+
+# ---------------------------------------------------------------------------
+# Bot error codes inside HTTP 200 responses
+# ---------------------------------------------------------------------------
+
+
+def _respond_with(body: bytes):
+    class _Resp(_FakeResp):
+        def read(self, _n=None):
+            return body
+
+    def fake(request, timeout=None):
+        return _Resp()
+
+    return fake
+
+
+def test_wecom_error_code_marks_failure(monkeypatch):
+    monkeypatch.setattr(
+        notify.urllib.request, "urlopen",
+        _respond_with(b'{"errcode":93000,"errmsg":"invalid webhook url"}'),
+    )
+    cfg = _cfg(wecom={"enabled": True, "webhook_url": "https://qyapi.weixin.qq.com/hook"})
+    assert notify.send("failed", "t", "m", sys_config=cfg) is False
+    report = notify.send_test(sys_config=cfg)
+    assert report["results"] == {"wecom": False}
+
+
+def test_feishu_error_code_marks_failure(monkeypatch):
+    monkeypatch.setattr(
+        notify.urllib.request, "urlopen",
+        _respond_with(b'{"code":19001,"msg":"invalid access token"}'),
+    )
+    cfg = _cfg(feishu={"enabled": True, "webhook_url": "https://open.feishu.cn/hook/x"})
+    assert notify.send("failed", "t", "m", sys_config=cfg) is False
+
+
+def test_success_codes_and_plain_bodies_are_accepted(monkeypatch):
+    cfg = _cfg(webhook_url="http://hook.test/notify")
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        _respond_with(b'{"errcode":0,"errmsg":"ok"}'))
+    assert notify.send("failed", "t", "m", sys_config=cfg) is True
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        _respond_with(b"plain text body"))
+    assert notify.send("failed", "t", "m", sys_config=cfg) is True
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _respond_with(b""))
+    assert notify.send("failed", "t", "m", sys_config=cfg) is True
