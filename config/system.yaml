@@ -76,18 +76,23 @@ budget:
 # ---------------------------------------------------------------------------
 # Notifications: webhook / 企业微信 / 飞书 / email (any combination).
 # Events: failed | cancelled | success | round_finished
+# Test delivery: python run.py --test-notify
+# Prefer *_url_env so webhook secrets stay in .env (never committed).
 # ---------------------------------------------------------------------------
 notifications:
   enabled: false
   notify_on: ["failed", "cancelled", "round_finished"]
   timeout: 10                  # per-channel HTTP timeout (s)
-  webhook_url: ""              # Slack/Discord compatible JSON POST
+  webhook_url: ""              # Slack/Discord compatible JSON POST (or env)
+  webhook_url_env: "NOTIFY_WEBHOOK_URL"
   wecom:                       # 企业微信群机器人
     enabled: false
     webhook_url: ""            # https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...
+    webhook_url_env: "WECOM_WEBHOOK_URL"
   feishu:                      # 飞书群机器人
     enabled: false
     webhook_url: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/...
+    webhook_url_env: "FEISHU_WEBHOOK_URL"
   email:
     enabled: false
     smtp_host: ""

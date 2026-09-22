@@ -38,6 +38,7 @@ import os
 import smtplib
 import urllib.error
 import urllib.request
+from datetime import datetime
 from email.mime.text import MIMEText
 from typing import Optional
 
@@ -63,14 +64,23 @@ def _config(sys_config: Optional[dict]) -> dict:
     return sys_config.get("notifications", {}) or {}
 
 
+def _channel_url(cfg: dict, channel: str) -> str:
+    """Resolve a channel webhook URL, preferring its ``webhook_url_env``."""
+    sub = cfg if channel == "webhook" else (cfg.get(channel) or {})
+    env_name = sub.get("webhook_url_env")
+    if env_name:
+        return os.environ.get(env_name, "") or ""
+    return sub.get("webhook_url") or ""
+
+
 def _channels(cfg: dict) -> list[str]:
     """Which channels are configured and enabled."""
     available = []
-    if cfg.get("webhook_url"):
+    if _channel_url(cfg, "webhook"):
         available.append("webhook")
-    if (cfg.get("wecom") or {}).get("enabled") and (cfg.get("wecom") or {}).get("webhook_url"):
+    if (cfg.get("wecom") or {}).get("enabled") and _channel_url(cfg, "wecom"):
         available.append("wecom")
-    if (cfg.get("feishu") or {}).get("enabled") and (cfg.get("feishu") or {}).get("webhook_url"):
+    if (cfg.get("feishu") or {}).get("enabled") and _channel_url(cfg, "feishu"):
         available.append("feishu")
     email_cfg = cfg.get("email") or {}
     if email_cfg.get("enabled") and email_cfg.get("smtp_host") and email_cfg.get("to_addrs"):
@@ -82,7 +92,7 @@ def is_enabled(event: str, sys_config: Optional[dict] = None) -> bool:
     cfg = _config(sys_config)
     if not cfg.get("enabled", False):
         return False
-    if event not in (cfg.get("notify_on") or _DEFAULT_EVENTS):
+    if event != "test" and event not in (cfg.get("notify_on") or _DEFAULT_EVENTS):
         return False
     return bool(_channels(cfg))
 
@@ -109,7 +119,7 @@ def _post_json(url: str, payload: dict, timeout: int) -> bool:
 
 
 def _send_webhook(cfg: dict, text: str, payload: dict, timeout: int) -> bool:
-    return _post_json(cfg["webhook_url"], payload, timeout)
+    return _post_json(_channel_url(cfg, "webhook"), payload, timeout)
 
 
 def _send_wecom(cfg: dict, text: str, timeout: int) -> bool:
@@ -117,7 +127,7 @@ def _send_wecom(cfg: dict, text: str, timeout: int) -> bool:
         "msgtype": "markdown",
         "markdown": {"content": text[:_MAX_TEXT]},
     }
-    return _post_json((cfg.get("wecom") or {})["webhook_url"], body, timeout)
+    return _post_json(_channel_url(cfg, "wecom"), body, timeout)
 
 
 def _send_feishu(cfg: dict, text: str, timeout: int) -> bool:
@@ -125,7 +135,7 @@ def _send_feishu(cfg: dict, text: str, timeout: int) -> bool:
         "msg_type": "text",
         "content": {"text": text[:_MAX_TEXT]},
     }
-    return _post_json((cfg.get("feishu") or {})["webhook_url"], body, timeout)
+    return _post_json(_channel_url(cfg, "feishu"), body, timeout)
 
 
 def _send_email(cfg: dict, title: str, text: str) -> bool:
@@ -161,6 +171,19 @@ def _send_email(cfg: dict, title: str, text: str) -> bool:
     return True
 
 
+def _deliver(channel: str, cfg: dict, timeout: int, title: str,
+             text: str, payload: dict) -> bool:
+    if channel == "webhook":
+        return _send_webhook(cfg, text, payload, timeout)
+    if channel == "wecom":
+        return _send_wecom(cfg, text, timeout)
+    if channel == "feishu":
+        return _send_feishu(cfg, text, timeout)
+    if channel == "email":
+        return _send_email(cfg, title, text)
+    raise ValueError(f"unknown channel: {channel}")
+
+
 def send(
     event: str,
     title: str,
@@ -191,16 +214,7 @@ def send(
     delivered = False
     for channel in _channels(cfg):
         try:
-            if channel == "webhook":
-                ok = _send_webhook(cfg, text, payload, timeout)
-            elif channel == "wecom":
-                ok = _send_wecom(cfg, text, timeout)
-            elif channel == "feishu":
-                ok = _send_feishu(cfg, text, timeout)
-            elif channel == "email":
-                ok = _send_email(cfg, title, text)
-            else:
-                continue
+            ok = _deliver(channel, cfg, timeout, title, text, payload)
             if ok:
                 delivered = True
                 logger.info("Notification sent via %s (%s): %s",
@@ -212,3 +226,32 @@ def send(
     if not delivered:
         logger.warning("Notification not delivered (%s): %s", event, title)
     return delivered
+
+
+def send_test(sys_config: Optional[dict] = None) -> dict:
+    """Send a test message and report per-channel delivery results."""
+    cfg = _config(sys_config)
+    if not cfg.get("enabled", False):
+        return {"enabled": False, "channels": [], "results": {}}
+
+    channels = _channels(cfg)
+    timeout = int(cfg.get("timeout", 10))
+    title = "通知测试"
+    text = f"[{title}] 这是一条测试消息 · {datetime.now():%Y-%m-%d %H:%M:%S}"
+    payload = {
+        "event": "test",
+        "title": title,
+        "message": text,
+        "text": text,
+        "content": text,
+    }
+
+    results: dict[str, bool] = {}
+    for channel in channels:
+        try:
+            results[channel] = bool(_deliver(channel, cfg, timeout, title, text, payload))
+        except Exception as exc:  # noqa: BLE001 - reported per channel
+            logger.warning("Test notification channel '%s' failed: %s",
+                           channel, str(exc)[:200])
+            results[channel] = False
+    return {"enabled": True, "channels": channels, "results": results}

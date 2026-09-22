@@ -54,13 +54,13 @@ research:                             # Agent loop
 notifications:                        # optional alerts (any combination)
   enabled: false
   notify_on: ["failed", "cancelled", "round_finished"]   # + success
-  webhook_url: ""                     # Slack/Discord compatible JSON POST
+  webhook_url_env: "NOTIFY_WEBHOOK_URL"   # Slack/Discord compatible JSON POST
   wecom:                              # 企业微信群机器人
     enabled: false
-    webhook_url: ""
+    webhook_url_env: "WECOM_WEBHOOK_URL"  # or inline webhook_url
   feishu:                             # 飞书群机器人
     enabled: false
-    webhook_url: ""
+    webhook_url_env: "FEISHU_WEBHOOK_URL"
   email:                              # SMTP (SMTP_PASSWORD in .env)
     enabled: false
     smtp_host: ""
@@ -117,6 +117,7 @@ python run.py --list-enabled       # List enabled jobs
 python run.py -v job_name          # Verbose mode
 python run.py -t 3600 job_name     # Timeout override (seconds)
 python run.py --validate           # Validate configs
+python run.py --test-notify        # Send a test notification to every channel
 
 # Export structured JSON artifacts for intelligence rounds
 python scripts/export_round_artifacts.py              # latest round

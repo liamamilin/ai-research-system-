@@ -53,6 +53,8 @@ Templates: copy from jobs/_templates/ to create new jobs""",
     p.add_argument("--check-budget", action="store_true",
                    help="Check month-to-date spend against budget.monthly_usd_limit "
                         "(exit 1 when exceeded and block_pipeline is on)")
+    p.add_argument("--test-notify", action="store_true",
+                   help="Send a test notification to every configured channel")
     p.add_argument("--timeout", "-t", type=int, help="Override AI timeout in seconds (default: from system.yaml)")
     p.add_argument("--status", nargs="?", const=True, default=False,
                    metavar="JOB",
@@ -159,6 +161,21 @@ def main():
             print("  ✗ monthly budget exceeded — blocking")
             sys.exit(1)
         sys.exit(0)
+
+    if args.test_notify:
+        from core.notify import send_test
+
+        report = send_test(sys_cfg)
+        if not report["enabled"]:
+            print("  notifications.enabled is false — nothing sent")
+            sys.exit(1)
+        if not report["channels"]:
+            print("  no notification channel configured "
+                  "(webhook_url / wecom / feishu / email)")
+            sys.exit(1)
+        for channel, ok in report["results"].items():
+            print(f"  {'✓' if ok else '✗'} {channel}")
+        sys.exit(0 if all(report["results"].values()) else 1)
 
     engine = ResearchEngine(config_dir=args.config_dir, jobs_dir=args.jobs_dir)
 

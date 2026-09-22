@@ -196,3 +196,66 @@ def test_multi_channel_one_failure_does_not_block(monkeypatch):
 def test_no_channel_configured_is_disabled():
     cfg = _cfg()  # enabled but no channel configured
     assert notify.is_enabled("failed", cfg) is False
+
+
+# ---------------------------------------------------------------------------
+# Env-var webhook URLs and test command
+# ---------------------------------------------------------------------------
+
+
+def test_webhook_url_env_resolution(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    monkeypatch.setenv("WECOM_HOOK_TEST", "https://qyapi.weixin.qq.com/hook?key=env")
+
+    cfg = _cfg(wecom={"enabled": True, "webhook_url_env": "WECOM_HOOK_TEST"})
+    assert notify.is_enabled("failed", cfg) is True
+    assert notify.send("failed", "t", "m", sys_config=cfg) is True
+    assert calls[0][0].endswith("key=env")
+
+
+def test_webhook_url_env_missing_is_disabled(monkeypatch):
+    monkeypatch.delenv("WECOM_HOOK_MISSING", raising=False)
+    cfg = _cfg(wecom={"enabled": True, "webhook_url_env": "WECOM_HOOK_MISSING"})
+    assert notify.is_enabled("failed", cfg) is False
+
+
+def test_env_url_takes_precedence_over_inline(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    monkeypatch.setenv("WECOM_HOOK_TEST", "https://qyapi.weixin.qq.com/hook?key=env")
+    cfg = _cfg(wecom={
+        "enabled": True,
+        "webhook_url": "https://qyapi.weixin.qq.com/hook?key=inline",
+        "webhook_url_env": "WECOM_HOOK_TEST",
+    })
+    notify.send("failed", "t", "m", sys_config=cfg)
+    assert calls[0][0].endswith("key=env")
+
+
+def test_test_event_bypasses_notify_on_filter():
+    cfg = _cfg(webhook_url="http://hook.test/notify")
+    cfg["notifications"]["notify_on"] = ["failed"]
+    assert notify.is_enabled("round_finished", cfg) is False
+    assert notify.is_enabled("test", cfg) is True
+
+
+def test_send_test_reports_per_channel(monkeypatch):
+    def fake(request, timeout=None):
+        if "qyapi" in request.full_url:
+            raise OSError("wecom down")
+        return _FakeResp()
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen", fake)
+    report = notify.send_test(sys_config=_cfg(
+        webhook_url="http://hook.test/ok",
+        wecom={"enabled": True, "webhook_url": "https://qyapi.weixin.qq.com/hook"},
+    ))
+    assert report["enabled"] is True
+    assert set(report["channels"]) == {"webhook", "wecom"}
+    assert report["results"] == {"webhook": True, "wecom": False}
+
+
+def test_send_test_disabled_configuration():
+    report = notify.send_test(sys_config={"notifications": {"enabled": False}})
+    assert report == {"enabled": False, "channels": [], "results": {}}
