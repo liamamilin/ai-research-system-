@@ -93,6 +93,7 @@ notifications:
     enabled: false
     webhook_url: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/...
     webhook_url_env: "FEISHU_WEBHOOK_URL"
+    secret_env: "FEISHU_BOT_SECRET"   # 仅当机器人启用「签名校验」时必填
   email:
     enabled: false
     smtp_host: ""

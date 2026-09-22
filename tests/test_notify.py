@@ -288,6 +288,49 @@ def test_wecom_error_code_marks_failure(monkeypatch):
     assert report["results"] == {"wecom": False}
 
 
+def test_feishu_signature_payload(monkeypatch):
+    import base64
+    import hashlib
+    import hmac
+
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    ok = notify.send("failed", "t", "m", sys_config=_cfg(
+        feishu={"enabled": True, "webhook_url": "https://open.feishu.cn/hook/x",
+                "secret": "s3cret"},
+    ))
+    assert ok is True
+    _, body = calls[0]
+    assert body["timestamp"]
+    expected = base64.b64encode(hmac.new(
+        f"{body['timestamp']}\ns3cret".encode("utf-8"),
+        digestmod=hashlib.sha256,
+    ).digest()).decode("utf-8")
+    assert body["sign"] == expected
+
+
+def test_feishu_without_secret_has_no_signature(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    notify.send("failed", "t", "m", sys_config=_cfg(
+        feishu={"enabled": True, "webhook_url": "https://open.feishu.cn/hook/x"},
+    ))
+    _, body = calls[0]
+    assert "sign" not in body and "timestamp" not in body
+
+
+def test_feishu_secret_env(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    monkeypatch.setenv("FEISHU_BOT_SECRET_TEST", "env-secret")
+    notify.send("failed", "t", "m", sys_config=_cfg(
+        feishu={"enabled": True, "webhook_url": "https://open.feishu.cn/hook/x",
+                "secret_env": "FEISHU_BOT_SECRET_TEST"},
+    ))
+    _, body = calls[0]
+    assert "sign" in body
+
+
 def test_feishu_error_code_marks_failure(monkeypatch):
     monkeypatch.setattr(
         notify.urllib.request, "urlopen",

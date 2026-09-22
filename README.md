@@ -61,6 +61,7 @@ notifications:                        # optional alerts (any combination)
   feishu:                             # 飞书群机器人
     enabled: false
     webhook_url_env: "FEISHU_WEBHOOK_URL"
+    secret_env: "FEISHU_BOT_SECRET"   # 启用「签名校验」时必填
   email:                              # SMTP (SMTP_PASSWORD in .env)
     enabled: false
     smtp_host: ""

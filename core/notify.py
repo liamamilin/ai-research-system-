@@ -32,10 +32,14 @@ Configured via ``system.yaml``::
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
 import smtplib
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -158,10 +162,20 @@ def _send_wecom(cfg: dict, text: str, timeout: int) -> bool:
 
 
 def _send_feishu(cfg: dict, text: str, timeout: int) -> bool:
-    body = {
+    sub = cfg.get("feishu") or {}
+    body: dict = {
         "msg_type": "text",
         "content": {"text": text[:_MAX_TEXT]},
     }
+    secret = sub.get("secret") or os.environ.get(sub.get("secret_env", ""), "")
+    if secret:
+        timestamp = str(int(time.time()))
+        digest = hmac.new(
+            f"{timestamp}\n{secret}".encode("utf-8"),
+            digestmod=hashlib.sha256,
+        ).digest()
+        body["timestamp"] = timestamp
+        body["sign"] = base64.b64encode(digest).decode("utf-8")
     return _post_json(_channel_url(cfg, "feishu"), body, timeout)
 
 
