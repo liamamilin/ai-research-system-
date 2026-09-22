@@ -94,6 +94,13 @@ notifications:
     webhook_url: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/...
     webhook_url_env: "FEISHU_WEBHOOK_URL"
     secret_env: "FEISHU_BOT_SECRET"   # 仅当机器人启用「签名校验」时必填
+  pushplus:                    # 个人微信直推（pushplus.plus，微信扫码登录）
+    enabled: false
+    token_env: "PUSHPLUS_TOKEN"
+    topic: ""                  # 可选：群组编码，推送给一组人
+  serverchan:                  # 个人微信直推（sct.ftqq.com）
+    enabled: false
+    sendkey_env: "SERVERCHAN_SENDKEY"
   email:
     enabled: false
     smtp_host: ""

@@ -340,6 +340,74 @@ def test_feishu_error_code_marks_failure(monkeypatch):
     assert notify.send("failed", "t", "m", sys_config=cfg) is False
 
 
+def test_pushplus_payload_and_env_token(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notify.urllib.request, "urlopen", _capture_urlopen(calls))
+    monkeypatch.setenv("PUSHPLUS_TOKEN_TEST", "pp-token")
+    ok = notify.send("failed", "Job 失败", "boom", sys_config=_cfg(
+        pushplus={"enabled": True, "token_env": "PUSHPLUS_TOKEN_TEST", "topic": "ops"},
+    ))
+    assert ok is True
+    url, body = calls[0]
+    assert url == "https://www.pushplus.plus/send"
+    assert body["token"] == "pp-token"
+    assert body["title"] == "Job 失败"
+    assert "boom" in body["content"]
+    assert body["topic"] == "ops"
+
+
+def test_pushplus_missing_token_is_disabled(monkeypatch):
+    monkeypatch.delenv("PUSHPLUS_MISSING", raising=False)
+    cfg = _cfg(pushplus={"enabled": True, "token_env": "PUSHPLUS_MISSING"})
+    assert notify.is_enabled("failed", cfg) is False
+
+
+def test_pushplus_error_code_marks_failure(monkeypatch):
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        _respond_with(b'{"code":401,"msg":"token invalid"}'))
+    cfg = _cfg(pushplus={"enabled": True, "token": "bad"})
+    assert notify.send("failed", "t", "m", sys_config=cfg) is False
+
+
+def test_pushplus_success_code_200(monkeypatch):
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        _respond_with(b'{"code":200,"msg":"ok"}'))
+    cfg = _cfg(pushplus={"enabled": True, "token": "good"})
+    assert notify.send("failed", "t", "m", sys_config=cfg) is True
+
+
+def test_serverchan_posts_form_with_sendkey(monkeypatch):
+    captured = {}
+
+    class _Resp(_FakeResp):
+        def read(self, _n=None):
+            return b'{"code":0,"message":"ok"}'
+
+    def fake(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["ctype"] = request.get_header("Content-type")
+        captured["body"] = request.data.decode("utf-8")
+        return _Resp()
+
+    monkeypatch.setattr(notify.urllib.request, "urlopen", fake)
+    monkeypatch.setenv("SERVERCHAN_KEY_TEST", "SCT123")
+    ok = notify.send("round_finished", "轮次", "status success", sys_config=_cfg(
+        serverchan={"enabled": True, "sendkey_env": "SERVERCHAN_KEY_TEST"},
+    ))
+    assert ok is True
+    assert captured["url"] == "https://sctapi.ftqq.com/SCT123.send"
+    assert captured["ctype"] == "application/x-www-form-urlencoded"
+    assert "title=%E8%BD%AE%E6%AC%A1" in captured["body"]
+    assert "status+success" in captured["body"]
+
+
+def test_serverchan_error_code_marks_failure(monkeypatch):
+    monkeypatch.setattr(notify.urllib.request, "urlopen",
+                        _respond_with(b'{"code":40001,"message":"bad key"}'))
+    cfg = _cfg(serverchan={"enabled": True, "sendkey": "bad"})
+    assert notify.send("failed", "t", "m", sys_config=cfg) is False
+
+
 def test_success_codes_and_plain_bodies_are_accepted(monkeypatch):
     cfg = _cfg(webhook_url="http://hook.test/notify")
     monkeypatch.setattr(notify.urllib.request, "urlopen",

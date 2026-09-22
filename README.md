@@ -62,6 +62,12 @@ notifications:                        # optional alerts (any combination)
     enabled: false
     webhook_url_env: "FEISHU_WEBHOOK_URL"
     secret_env: "FEISHU_BOT_SECRET"   # 启用「签名校验」时必填
+  pushplus:                           # 个人微信直推（pushplus.plus）
+    enabled: false
+    token_env: "PUSHPLUS_TOKEN"
+  serverchan:                         # 个人微信直推（sct.ftqq.com）
+    enabled: false
+    sendkey_env: "SERVERCHAN_SENDKEY"
   email:                              # SMTP (SMTP_PASSWORD in .env)
     enabled: false
     smtp_host: ""
@@ -162,7 +168,7 @@ python run_web.py reindex                  # Force re-scan output/ for search in
 | Dashboard | Job statistics, recent runs, token usage & estimated cost, 月度预算进度 |
 | Rounds board | 情报轮次看板：10 阶段状态、一键运行、失败阶段补跑、历史轮次；每轮自动生成并在卡片上直接下载 `action_items.json` / `watchlist.json` / `sources.json` 结构化产物（失败可手动补跑导出脚本） |
 | Account | 修改密码、会话管理、API Token（脚本/CI 用 Bearer 调用，免 CSRF）；管理员可改角色/禁用/重置密码/强制下线 |
-| Notifications | 通知（失败/取消/完成/轮次完成）：Webhook（Slack/Discord 兼容）、企业微信、飞书、邮件 |
+| Notifications | 通知（失败/取消/完成/轮次完成）：Webhook（Slack/Discord 兼容）、企业微信、飞书、**个人微信（PushPlus / Server酱）**、邮件；`python run.py --test-notify` 一键验证 |
 | Job management | Browse jobs, view/edit YAML config (Monaco editor), trigger/cancel runs |
 | Real-time logs | SSE stream of job execution logs with live status updates |
 | Report viewer | Markdown rendering (GFM tables, code blocks, TOC sidebar), 报告元数据（模型/tokens/耗时）|

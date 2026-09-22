@@ -4,7 +4,9 @@ Channels (all optional, any combination):
 
 * ``webhook_url``  - generic JSON POST (Slack/Discord compatible ``text``/``content``)
 * ``wecom``        - 企业微信群机器人 (markdown message)
-* ``feishu``       - 飞书群机器人 (text message)
+* ``feishu``       - 飞书群机器人 (text message, optional signature)
+* ``pushplus``     - 个人微信直推 via pushplus.plus
+* ``serverchan``   - 个人微信直推 via sct.ftqq.com
 * ``email``        - SMTP (SSL or STARTTLS)
 
 Configured via ``system.yaml``::
@@ -41,6 +43,7 @@ import os
 import smtplib
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from email.mime.text import MIMEText
@@ -77,6 +80,21 @@ def _channel_url(cfg: dict, channel: str) -> str:
     return sub.get("webhook_url") or ""
 
 
+def _credential(sub: dict, env_key: str, inline_key: str) -> str:
+    """Resolve a channel credential, preferring its ``*_env`` variable."""
+    env_name = sub.get(env_key)
+    if env_name:
+        return os.environ.get(env_name, "") or ""
+    return sub.get(inline_key) or ""
+
+
+def _push_token(cfg: dict, channel: str) -> str:
+    sub = cfg.get(channel) or {}
+    if channel == "pushplus":
+        return _credential(sub, "token_env", "token")
+    return _credential(sub, "sendkey_env", "sendkey")
+
+
 def _channels(cfg: dict) -> list[str]:
     """Which channels are configured and enabled."""
     available = []
@@ -86,6 +104,9 @@ def _channels(cfg: dict) -> list[str]:
         available.append("wecom")
     if (cfg.get("feishu") or {}).get("enabled") and _channel_url(cfg, "feishu"):
         available.append("feishu")
+    for channel in ("pushplus", "serverchan"):
+        if (cfg.get(channel) or {}).get("enabled") and _push_token(cfg, channel):
+            available.append(channel)
     email_cfg = cfg.get("email") or {}
     if email_cfg.get("enabled") and email_cfg.get("smtp_host") and email_cfg.get("to_addrs"):
         available.append("email")
@@ -106,11 +127,11 @@ def is_enabled(event: str, sys_config: Optional[dict] = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _check_bot_response(body: bytes) -> None:
-    """Raise when a bot webhook reports a non-zero code in its JSON body.
+def _check_bot_response(body: bytes, success_codes: tuple = (0,)) -> None:
+    """Raise when a push service reports a failure code in its JSON body.
 
-    WeCom and Feishu answer HTTP 200 even for rejected messages; the real
-    status lives in ``errcode`` / ``code``.
+    WeCom, Feishu and PushPlus answer HTTP 200 even for rejected messages;
+    the real status lives in ``errcode`` / ``code``.
     """
     if not body:
         return
@@ -127,12 +148,13 @@ def _check_bot_response(body: bytes) -> None:
         code = int(code)
     except (TypeError, ValueError):
         return
-    if code != 0:
-        msg = data.get("errmsg") or data.get("msg") or ""
+    if code not in success_codes:
+        msg = data.get("errmsg") or data.get("msg") or data.get("message") or ""
         raise RuntimeError(f"webhook rejected the message: code={code} {msg}")
 
 
-def _post_json(url: str, payload: dict, timeout: int) -> bool:
+def _post_json(url: str, payload: dict, timeout: int,
+               success_codes: tuple = (0,)) -> bool:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -145,7 +167,25 @@ def _post_json(url: str, payload: dict, timeout: int) -> bool:
     )
     with urllib.request.urlopen(request, timeout=timeout) as resp:
         body = resp.read(4096)
-    _check_bot_response(body)
+    _check_bot_response(body, success_codes)
+    return True
+
+
+def _post_form(url: str, fields: dict, timeout: int,
+               success_codes: tuple = (0,)) -> bool:
+    data = urllib.parse.urlencode(fields).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "BaseCodingCLi-Notify/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        body = resp.read(4096)
+    _check_bot_response(body, success_codes)
     return True
 
 
@@ -177,6 +217,26 @@ def _send_feishu(cfg: dict, text: str, timeout: int) -> bool:
         body["timestamp"] = timestamp
         body["sign"] = base64.b64encode(digest).decode("utf-8")
     return _post_json(_channel_url(cfg, "feishu"), body, timeout)
+
+
+def _send_pushplus(cfg: dict, title: str, text: str, timeout: int) -> bool:
+    sub = cfg.get("pushplus") or {}
+    body = {
+        "token": _push_token(cfg, "pushplus"),
+        "title": title,
+        "content": text[:_MAX_TEXT],
+        "template": "markdown",
+    }
+    if sub.get("topic"):
+        body["topic"] = sub["topic"]
+    return _post_json("https://www.pushplus.plus/send", body, timeout,
+                      success_codes=(200,))
+
+
+def _send_serverchan(cfg: dict, title: str, text: str, timeout: int) -> bool:
+    sendkey = _push_token(cfg, "serverchan")
+    url = f"https://sctapi.ftqq.com/{sendkey}.send"
+    return _post_form(url, {"title": title, "desp": text[:_MAX_TEXT]}, timeout)
 
 
 def _send_email(cfg: dict, title: str, text: str) -> bool:
@@ -220,6 +280,10 @@ def _deliver(channel: str, cfg: dict, timeout: int, title: str,
         return _send_wecom(cfg, text, timeout)
     if channel == "feishu":
         return _send_feishu(cfg, text, timeout)
+    if channel == "pushplus":
+        return _send_pushplus(cfg, title, text, timeout)
+    if channel == "serverchan":
+        return _send_serverchan(cfg, title, text, timeout)
     if channel == "email":
         return _send_email(cfg, title, text)
     raise ValueError(f"unknown channel: {channel}")
