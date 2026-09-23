@@ -70,6 +70,8 @@
 - 新增测试文件：tracking, tracking_api, artifacts(diff), reports_meta, reports_api, share, render, digest, sources, embeddings, vectors, qa, backup_script, setup_api
 - 安装/运行：pip + npm ok；`run.py --list` 24 jobs；`create_app()` ok
 - 备份：`scripts/backup_state.sh --dry-run` 正确列出 users.db/reports.db 等
+- 端到端冒烟（真实进程，临时配置/端口 8899）：login/reports/meta/fav/tags/ratings/html/actions/rounds/share 全 200；
+  匿名分享读取 200；QA 在无 LLM key 时正确返回 502 且引用检索命中；reindex 无 embedding 配置返回 422
 
 ## Remaining Blockers
 

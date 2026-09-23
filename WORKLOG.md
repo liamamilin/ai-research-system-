@@ -151,3 +151,14 @@ CYCLE_OK
 - Suggested commit: docs: autopilot final report (PROJECT_ACCEPTED)
 
 CYCLE_DONE
+
+### 2026-09-23 (post-delivery E2E smoke)
+- Task: 真实进程端到端冒烟（临时配置 + 独立端口 8899）
+- Flow: create-admin -> login(200) -> reports(total=2, lifespan 索引生效)
+  -> meta(favorite/tags/rating 200) -> favorite/tags/ratings(200)
+  -> html(200) -> actions/rounds(200) -> share(200) -> 匿名 /api/share(200)
+  -> qa(502 llm_failed，引用检索正确 demo/alpha.md) -> reindex(422 未配置 embeddings)
+- Evidence: ratings avg 5.0；fav 过滤命中；tags smoke；HTML 渲染成功；服务与临时目录已清理
+- Suggested commit: docs: record E2E smoke evidence
+
+CYCLE_OK
