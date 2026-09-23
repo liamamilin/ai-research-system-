@@ -1,25 +1,49 @@
-# ── Minimal / Quick-Query Template ──
-# Copy anywhere and customize. One-off research, quick lookups (~2-5 min).
-
-name: "<Topic> Quick Lookup"
-description: "Quick research on <topic>"
+name: "<Topic> Quick Check"
+label: "快速核验"
+category: "monitoring"
+description: "低成本快速核验：回答一个具体问题，500 字以内，适合高频轻量检查"
 enabled: false
 keywords:
   - <keyword1>
   - <keyword2>
 language: "zh"
 schedule:
-  type: "manual"
+  type: "daily"
+  time: "09:00"
+  timezone: "Asia/Shanghai"
 runtime:
   timeout_seconds: 600
   skip_if_running: true
 prompt: |
-  Research {name}. Keywords: {keywords}. Language: {language}.
+  你是 {name} 领域的事实核验分析师。你只回答有证据支撑的问题，不做推测和展望。
 
-  Generate a concise Markdown report with:
-  - Key findings
-  - Recent developments
-  - Notable sources
+  ## 任务
+  针对以下关键词，核验当前状态并给出简明结论：{keywords}
+  关注窗口：最近 30 天（如存在更相关的重大变更可放宽，但须注明日期）。
+  输出语言：{language}（专业术语首次出现时括注英文原词）。
 
-  Keep it under 500 words.
-output: "output/{date}_<topic>_quick.md"
+  ## 证据规则
+  1. 每个事实性陈述后紧跟来源 URL 与发布日期。
+  2. 至少 2 个独立来源；仅能找到一个来源时，明确标注"单一来源，待验证"。
+  3. 查不到可靠信息时，直接回答"未找到可靠信息"并列出你检索过的角度，禁止用推测填补空白。
+
+  ## 输出结构
+  **结论**（不超过 80 字，直接给答案）
+
+  **事实依据**
+  - 逐条列出：事实 | 日期 | 来源
+
+  **不确定与待验证**
+  - 存在分歧的表述、单一来源的信息、可能已过期的数据
+
+  **参考**
+  - 编号列表：标题 | 日期 | URL
+
+  ## 质量红线
+  - 禁止编造信息、数字、日期或 URL。
+  - 禁止给出未在证据中出现的建议或判断。
+  - 禁止用"可能""预计"等措辞替代验证。
+
+  ## 长度约束
+  总长度不超过 500 字。
+output: "output/monitoring/{date}_{name}.md"

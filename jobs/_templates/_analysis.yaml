@@ -1,35 +1,76 @@
-# ── Trend / Gap Analysis Template ──
-# Copy to jobs/analysis/ and customize.
-# Analytical research (~8-12 min), identifies patterns and opportunities.
-
-name: "<Topic> Analysis"
-description: "Analyze <topic> trends, gaps, and opportunities"
+name: "<Topic> Trend Analysis"
+label: "趋势与拐点分析"
+category: "analysis"
+description: "识别变化而非罗列：早/中/晚期信号、驱动因素、拐点判定、反向指标"
 enabled: false
 keywords:
   - <keyword1>
   - <keyword2>
   - <keyword3>
-  - <keyword4>
 language: "zh"
 schedule:
   type: "weekly"
-  time: "09:00"
+  time: "08:00"
   timezone: "Asia/Shanghai"
 runtime:
   timeout_seconds: 3600
   skip_if_running: true
 prompt: |
-  You are a technology analyst. Analyze the current state of {name}.
+  你是 {name} 领域的趋势分析师。你的任务是判断"什么在改变"，而不是把最近发生的事按时间顺序复述。读者会据此调整投入方向，因此误判代价很高。
 
-  Keywords: {keywords}
-  Language: {language}
+  ## 任务
+  分析以下关键词相关领域在 {date_7d_ago} 至 {date} 期间的变化趋势：
+  {keywords}
 
-  Generate an analysis report in Markdown covering:
-  1. **Current Landscape** - state of the art, key players, dominant approaches
-  2. **Trends & Shifts** - what's rising, what's declining (last 6 months)
-  3. **Gaps & Limitations** - unsolved problems, weaknesses, blind spots
-  4. **Opportunities** - high-potential areas, entry points for innovation
-  5. **Predictions** - where the field is heading (6-12 months)
+  观察窗口为最近 90 天（重点最近 14 天），以判断当前处于趋势的哪个阶段。
+  输出语言：{language}（专业术语首次出现时括注英文原词）。
 
-  Focus on actionable insights. Each finding should point to a concrete opportunity or risk.
-output: "output/analysis/{date}_<topic>_analysis.md"
+  ## 分析方法（必须显式使用）
+  1. **信号分级**：对每条信号标注阶段——
+     - 早期：个别团队/小范围尝试，主流尚未跟进
+     - 中期：多个独立团队采用，出现工具链与基础设施配套
+     - 晚期：已成默认做法，或开始出现"过度采用"迹象
+  2. **驱动因素**：区分外部驱动（政策、成本、硬件、社区）与内部驱动（技术成熟、工具可用性、开发者体验）。
+  3. **反向指标**：给出 2-3 个能证伪该趋势判断的指标或事件，并说明观察它们的方式。
+  4. **时间尺度**：明确区分 3 个月内、12 个月内、3 年以上的判断，不混为一谈。
+
+  ## 证据规则
+  1. 每条信号必须给出：具体事件或数据、发布日期、来源 URL。
+  2. 采用计数必须有明确口径（多少个团队、多少次提交、多少家厂商），禁止"越来越多"这类表述。
+  3. 区分"采用"与"讨论热度"：下载量、提交数、付费用户数属于前者，文章数、社交媒体提及属于后者。
+  4. 单源信号标注"待验证"。
+
+  ## 输出结构
+  ### 1. 趋势判断摘要
+  3-5 句：当前最重要的 1-2 个趋势及其阶段判断与置信度。
+
+  ### 2. 信号清单
+  表格：信号 | 阶段（早/中/晚）| 证据（事件/数据）| 日期 | 来源 | 采用 vs 讨论 | 置信度。
+
+  ### 3. 驱动因素分析
+  表格：驱动因素 | 类型（外部/内部）| 强度 | 持续性预期 | 依据。
+
+  ### 4. 拐点判定
+  是否已过拐点、还有多久、判定依据。给出明确的"我判断已过/未过拐点"及理由。
+
+  ### 5. 反向指标与证伪条件
+  表格：可证伪指标 | 当前读数 | 触发重新判断的阈值 | 观察方式。
+
+  ### 6. 对不同角色的含义
+  分别给出：现在投入的人、观望的人、已重仓的人各自应关注什么。
+
+  ### 7. 不确定与盲区
+  数据不可得、样本偏差、可能存在但未观察到的反向信号。
+
+  ### 8. 来源清单
+  编号列表：标题 | 发布日期 | URL。
+
+  ## 质量红线
+  - 禁止把新闻时间线当作趋势分析。
+  - 禁止使用无口径的量化表述。
+  - 禁止只列支持性证据（必须有反向指标）。
+  - 禁止编造未证实的信息、数据、日期或 URL。
+
+  ## 长度约束
+  2000-4000 字。
+output: "output/analysis/{date}_{name}.md"

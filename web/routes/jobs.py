@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -24,6 +25,11 @@ from web.settings import get_settings
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 _registry = TaskRegistry()
+
+PROMPT_VARIABLES = {"name", "keywords", "language", "date", "date_7d_ago", "time", "datetime"}
+OUTPUT_VARIABLES = {"name", "date", "time", "datetime"}
+TEMPLATE_CATEGORIES = {"monitoring", "research", "analysis", "practice", "actionable"}
+SCHEDULE_TYPES = {"manual", "daily", "weekly", "monthly"}
 
 
 def _category_from_name(name: str) -> str:
@@ -65,6 +71,24 @@ def list_all(user=Depends(require_viewer)):
     return result
 
 
+@router.get("/categories")
+def list_categories(user=Depends(require_viewer)):
+    """Existing job categories (top-level subdirectories) with job counts."""
+    settings = get_settings()
+    counts: dict[str, int] = {}
+    for name in list_jobs(settings.paths.jobs_dir):
+        cat = _category_from_name(name)
+        if not cat:
+            continue
+        counts[cat] = counts.get(cat, 0) + 1
+    return {
+        "categories": [
+            {"name": cat, "count": counts[cat]}
+            for cat in sorted(counts)
+        ]
+    }
+
+
 @router.get("/templates")
 def list_templates(user=Depends(require_viewer)):
     """List available job templates from jobs/_templates/."""
@@ -82,15 +106,275 @@ def list_templates(user=Depends(require_viewer)):
             with open(fp, "r", encoding="utf-8") as f:
                 content = f.read()
             parsed = yaml_io.parse_yaml(content)
+            key = fn.rsplit(".", 1)[0]
             templates.append({
-                "name": fn.replace("_", "").replace(".yaml", "").replace(".yml", ""),
+                "key": key,
+                "name": key.lstrip("_"),
                 "filename": fn,
-                "description": parsed.get("description", ""),
+                "label": str(parsed.get("label") or parsed.get("name") or key),
+                "category": str(parsed.get("category") or ""),
+                "description": str(parsed.get("description") or ""),
+                "builtin": key.startswith("_"),
+                "variables": _prompt_variables(parsed),
+                "output_template": str(parsed.get("output") or ""),
+                "updated_at": _file_mtime(fp),
+                **_template_fields(parsed),
                 "content": content,
             })
         except Exception:
             continue
     return {"templates": templates}
+
+
+@router.post("/templates", status_code=status.HTTP_201_CREATED)
+def create_template(payload: dict, user=Depends(require_editor)):
+    """Create a new reusable job template in jobs/_templates/."""
+    settings = get_settings()
+    tmpl_dir = os.path.join(settings.paths.jobs_dir, "_templates")
+    os.makedirs(tmpl_dir, exist_ok=True)
+
+    data = _validate_template_payload(payload, partial=False)
+    key = data["_key"]
+    file_path = os.path.join(tmpl_dir, f"{key}.yaml")
+    if os.path.isfile(file_path):
+        raise HTTPException(status_code=409, detail=ApiError.make("template_exists", f"模板 '{key}' 已存在"))
+
+    file_path = _write_template(tmpl_dir, data)
+    audit.log("template_create", user=user["username"], target=key, result="success")
+    return _read_template(tmpl_dir, key)
+
+
+@router.put("/templates/{key}")
+def update_template(key: str, payload: dict, user=Depends(require_editor)):
+    """Update an existing template. Built-in templates may be edited but not deleted."""
+    settings = get_settings()
+    tmpl_dir = os.path.join(settings.paths.jobs_dir, "_templates")
+    _require_key(key, allow_builtin=True)
+    file_path = _template_path(tmpl_dir, key)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=ApiError.make("template_not_found", f"模板 '{key}' 不存在"))
+
+    merged = _validate_template_payload(payload, partial=True, existing=file_path)
+    merged["_key"] = key
+    yaml_io.save_backup(file_path, _read_text(file_path))
+    _write_template(tmpl_dir, merged)
+    audit.log("template_update", user=user["username"], target=key, result="success")
+    return _read_template(tmpl_dir, key)
+
+
+@router.delete("/templates/{key}")
+def delete_template(key: str, user=Depends(require_editor)):
+    """Delete a user-created template. Built-in templates are protected."""
+    settings = get_settings()
+    tmpl_dir = os.path.join(settings.paths.jobs_dir, "_templates")
+    _require_key(key, allow_builtin=False)
+    file_path = _template_path(tmpl_dir, key)
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail=ApiError.make("template_not_found", f"模板 '{key}' 不存在"))
+    os.remove(file_path)
+    audit.log("template_delete", user=user["username"], target=key, result="success")
+    return {"ok": True, "key": key}
+
+
+def _read_text(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def _file_mtime(path: str) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(path)))
+    except OSError:
+        return ""
+
+
+def _prompt_variables(parsed: dict) -> list[str]:
+    prompt = str(parsed.get("prompt") or "")
+    return sorted(set(re.findall(r"\{(\w+)\}", prompt)))
+
+
+def _template_path(tmpl_dir: str, key: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{1,63}", key):
+        raise HTTPException(status_code=422, detail=ApiError.make("invalid_template_key", "模板 key 含非法字符"))
+    return os.path.join(tmpl_dir, f"{key}.yaml")
+
+
+def _require_key(key: str, allow_builtin: bool) -> None:
+    _template_path("", key)
+    if key.startswith("_") and not allow_builtin:
+        raise HTTPException(
+            status_code=409,
+            detail=ApiError.make("builtin_template", "系统内置模板不可删除"),
+        )
+
+
+def _template_data(
+    key: str,
+    label: str,
+    category: str,
+    description: str,
+    prompt: str,
+    name: str,
+    keywords: list,
+    language: str,
+    output: str,
+    timeout: int,
+    schedule: Optional[dict],
+) -> dict:
+    data: dict = {
+        "name": name,
+        "label": label,
+        "category": category,
+        "description": description,
+        "enabled": False,
+        "keywords": keywords,
+        "language": language,
+    }
+    if schedule:
+        data["schedule"] = schedule
+    data["runtime"] = {"timeout_seconds": timeout, "skip_if_running": True}
+    data["prompt"] = prompt if prompt.endswith("\n") else prompt + "\n"
+    data["output"] = output
+    return data
+
+
+def _validate_template_payload(payload: dict, partial: bool, existing: Optional[str] = None) -> dict:
+    """Validate template fields; merge with existing file when partial=True."""
+    base: dict = {}
+    if partial and existing:
+        base = yaml_io.parse_yaml(_read_text(existing))
+    elif not partial:
+        for field in ("key", "label", "prompt"):
+            if not str(payload.get(field, "")).strip():
+                raise HTTPException(status_code=422, detail=ApiError.make(f"missing_{field}", f"缺少必填字段: {field}"))
+
+    key = str(payload.get("key") or base.get("_key") or "").strip()
+    if not partial:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{1,48}", key):
+            raise HTTPException(
+                status_code=422,
+                detail=ApiError.make(
+                    "invalid_template_key",
+                    "模板 key 只能使用小写字母、数字、下划线、连字符（2-49 字符），且不能以 _ 开头",
+                ),
+            )
+
+    label = str(payload.get("label", base.get("label", ""))).strip()
+    category = str(payload.get("category", base.get("category", ""))).strip()
+    if category and category not in TEMPLATE_CATEGORIES:
+        raise HTTPException(
+            status_code=422,
+            detail=ApiError.make("invalid_category", f"分类必须是: {', '.join(sorted(TEMPLATE_CATEGORIES))}"),
+        )
+    description = str(payload.get("description", base.get("description", ""))).strip()
+    if len(description) > 300:
+        raise HTTPException(status_code=422, detail=ApiError.make("description_too_long", "描述不能超过 300 字符"))
+
+    prompt = str(payload.get("prompt", base.get("prompt", "")))
+    if not prompt.strip():
+        raise HTTPException(status_code=422, detail=ApiError.make("missing_prompt", "缺少 prompt 内容"))
+    if len(prompt.strip()) < 20:
+        raise HTTPException(status_code=422, detail=ApiError.make("prompt_too_short", "prompt 内容过短（至少 20 字符）"))
+    unknown = [v for v in _prompt_variables({"prompt": prompt}) if v not in PROMPT_VARIABLES]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=ApiError.make(
+                "unknown_variables",
+                f"未知变量: {', '.join(unknown)}；可用变量: {', '.join(sorted(PROMPT_VARIABLES))}",
+            ),
+        )
+
+    name = str(payload.get("name", base.get("name", ""))).strip() or f"<{label or key}>"
+    language = str(payload.get("language", base.get("language", "zh"))).strip() or "zh"
+    keywords = payload.get("keywords", base.get("keywords", []) or [])
+    if isinstance(keywords, str):
+        keywords = [k.strip() for k in keywords.split(",") if k.strip()]
+    if not isinstance(keywords, list):
+        raise HTTPException(status_code=422, detail=ApiError.make("invalid_keywords", "keywords 必须是列表"))
+    keywords = [str(k).strip() for k in keywords if str(k).strip()][:20]
+
+    output = str(payload.get("output", base.get("output", ""))).strip()
+    if not output:
+        output = f"output/{category or 'custom'}/{{date}}_{{name}}.md"
+    if output.startswith("/") or ".." in output or not output.endswith(".md"):
+        raise HTTPException(
+            status_code=422,
+            detail=ApiError.make("invalid_output", "output 必须是相对路径、以 .md 结尾且不含 .."),
+        )
+    bad_out_vars = [v for v in re.findall(r"\{(\w+)\}", output) if v not in OUTPUT_VARIABLES]
+    if bad_out_vars:
+        raise HTTPException(
+            status_code=422,
+            detail=ApiError.make("invalid_output", f"output 中未知变量: {', '.join(bad_out_vars)}"),
+        )
+
+    timeout = payload.get("timeout_seconds", base.get("runtime", {}).get("timeout_seconds", 3600))
+    try:
+        timeout = int(timeout)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=ApiError.make("invalid_timeout", "timeout_seconds 必须是整数"))
+    if not 60 <= timeout <= 86400:
+        raise HTTPException(status_code=422, detail=ApiError.make("invalid_timeout", "timeout_seconds 需在 60-86400 之间"))
+
+    schedule = payload.get("schedule", base.get("schedule"))
+    if schedule is not None:
+        if not isinstance(schedule, dict):
+            raise HTTPException(status_code=422, detail=ApiError.make("invalid_schedule", "schedule 必须是对象"))
+        stype = str(schedule.get("type", "manual")).strip()
+        if stype not in SCHEDULE_TYPES:
+            raise HTTPException(
+                status_code=422,
+                detail=ApiError.make("invalid_schedule", f"schedule.type 必须是: {', '.join(sorted(SCHEDULE_TYPES))}"),
+            )
+        stime = str(schedule.get("time", "08:00")).strip()
+        if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", stime):
+            raise HTTPException(status_code=422, detail=ApiError.make("invalid_schedule", "schedule.time 格式必须是 HH:MM"))
+        schedule = {"type": stype, "time": stime, "timezone": str(schedule.get("timezone", "Asia/Shanghai")).strip()}
+
+    data = _template_data(key, label, category, description, prompt, name, keywords, language, output, timeout, schedule)
+    data["_key"] = key
+    return data
+
+
+def _write_template(tmpl_dir: str, data: dict) -> str:
+    key = data.pop("_key")
+    file_path = _template_path(tmpl_dir, key)
+    yaml_io.atomic_write(file_path, yaml_io.dump_yaml(data))
+    return file_path
+
+
+def _template_fields(parsed: dict) -> dict:
+    """Parsed template fields exposed to the UI (avoids client-side YAML parsing)."""
+    runtime = parsed.get("runtime") or {}
+    return {
+        "job_name": str(parsed.get("name") or ""),
+        "prompt": str(parsed.get("prompt") or ""),
+        "keywords": list(parsed.get("keywords", []) or []),
+        "language": str(parsed.get("language") or "zh"),
+        "timeout_seconds": runtime.get("timeout_seconds"),
+        "schedule": parsed.get("schedule") or None,
+    }
+
+
+def _read_template(tmpl_dir: str, key: str) -> dict:
+    file_path = _template_path(tmpl_dir, key)
+    content = _read_text(file_path)
+    parsed = yaml_io.parse_yaml(content)
+    return {
+        "key": key,
+        "name": key.lstrip("_"),
+        "filename": os.path.basename(file_path),
+        "label": str(parsed.get("label") or parsed.get("name") or key),
+        "category": str(parsed.get("category") or ""),
+        "description": str(parsed.get("description") or ""),
+        "builtin": key.startswith("_"),
+        "variables": _prompt_variables(parsed),
+        "output_template": str(parsed.get("output") or ""),
+        "updated_at": _file_mtime(file_path),
+        **_template_fields(parsed),
+        "content": content,
+    }
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -109,10 +393,11 @@ def create_job(payload: dict, user=Depends(require_editor)):
     if not name:
         raise HTTPException(status_code=422, detail=ApiError.make("missing_name", "缺少 job 名称"))
 
-    # Sanitize: prevent path traversal in name and category
-    safe_name = re.sub(r"[^a-zA-Z0-9_\-,]", "_", name.replace(" ", "_").lower())
+    # Sanitize: prevent path traversal in name and category (keep CJK letters)
+    safe_name = re.sub(r"[^\w\-,]", "_", name.replace(" ", "_").lower())
+    safe_name = re.sub(r"_+", "_", safe_name).strip("_") or "job"
     if category:
-        safe_category = re.sub(r"[^a-zA-Z0-9_\-/]", "", category.strip().lower())
+        safe_category = re.sub(r"[^\w\-/]", "", category.strip().lower())
         safe_category = os.path.normpath(safe_category).lstrip("/")
         # Prevent traversal via normalized path
         if safe_category.startswith("..") or "/.." in safe_category:
@@ -131,23 +416,30 @@ def create_job(payload: dict, user=Depends(require_editor)):
     if os.path.isfile(file_path):
         raise HTTPException(status_code=409, detail=ApiError.make("job_exists", f"Job '{safe_name}' 已存在"))
 
-    # If template provided, use it as base
+    # If template provided, use it as base and apply form overrides
     if template_name:
         tmpl_dir = os.path.join(settings.paths.jobs_dir, "_templates")
-        tmpl_path = os.path.join(tmpl_dir, template_name)
-        if os.path.isfile(tmpl_path):
-            with open(tmpl_path, "r", encoding="utf-8") as f:
-                base_content = f.read()
+        base_content = _load_template_content(tmpl_dir, template_name)
+        if base_content:
+            base_data = yaml_io.parse_yaml(base_content)
+            if name:
+                base_data["name"] = name
+            if description:
+                base_data["description"] = description
+            if keywords:
+                base_data["keywords"] = keywords
+            if language:
+                base_data["language"] = language
+            if prompt:
+                base_data["prompt"] = prompt
+            if output:
+                base_data["output"] = output
+            base_data["enabled"] = True
+            base_data.pop("label", None)
+            base_data.pop("category", None)
+            base_content = yaml_io.dump_yaml(base_data)
         else:
-            # Try without underscore prefix
-            alt = os.path.join(tmpl_dir, f"_{template_name}")
-            if not os.path.isfile(alt):
-                alt = os.path.join(tmpl_dir, f"_{template_name}.yaml")
-            if os.path.isfile(alt):
-                with open(alt, "r", encoding="utf-8") as f:
-                    base_content = f.read()
-            else:
-                base_content = _default_job_yaml(name, description, language, keywords, prompt, output)
+            base_content = _default_job_yaml(name, description, language, keywords, prompt, output)
     else:
         base_content = _default_job_yaml(name, description, language, keywords, prompt, output)
 
@@ -160,6 +452,23 @@ def create_job(payload: dict, user=Depends(require_editor)):
     if job:
         return _summary(job)
     return {"ok": True, "path": file_path}
+
+
+def _load_template_content(tmpl_dir: str, template_name: str) -> str:
+    """Resolve a template reference (filename, key, or key without underscore) to file content."""
+    if not template_name or os.path.sep in template_name or template_name.startswith("."):
+        return ""
+    candidates = [template_name]
+    if not template_name.endswith((".yaml", ".yml")):
+        candidates += [f"{template_name}.yaml", f"_{template_name}", f"_{template_name}.yaml"]
+    for cand in candidates:
+        path = os.path.join(tmpl_dir, cand)
+        if os.path.isfile(path):
+            try:
+                return _read_text(path)
+            except OSError:
+                return ""
+    return ""
 
 
 def _default_job_yaml(name: str, description: str, language: str, keywords: list, prompt: str, output: str) -> str:
@@ -416,6 +725,10 @@ def get_one(name: str, user=Depends(require_viewer)):
         yaml_content=yaml_content,
         yaml_mtime=mtime,
         file_path=file_path,
+        prompt=str(job.get("prompt") or ""),
+        language=str(job.get("language") or "zh"),
+        timeout_seconds=(job.get("runtime") or {}).get("timeout_seconds"),
+        schedule=job.get("schedule") or None,
     )
 
 

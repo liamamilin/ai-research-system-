@@ -1,10 +1,9 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 import { Trash2 } from "lucide-react";
-
-const YamlEditor = lazy(() => import("@/components/YamlEditor").then(m => ({ default: m.YamlEditor })));
+import { SystemConfig } from "@/components/SystemConfig";
 
 type SettingsTab = "system" | "users" | "audit" | "logs";
 
@@ -55,122 +54,6 @@ export function SettingsPage() {
       {tab === "users" && <UserManagement />}
       {tab === "audit" && <AuditLog />}
       {tab === "logs" && <GlobalLogs />}
-    </div>
-  );
-}
-
-// --- System Config ---
-
-function SystemConfig() {
-  const [content, setContent] = useState("");
-  const [mtime, setMtime] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [conflict, setConflict] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<any>(null);
-
-  const load = () => {
-    setLoading(true);
-    setError("");
-    setConflict(false);
-    api<any>("/api/config/system")
-      .then((data) => {
-        setContent(data.content);
-        setMtime(typeof data.mtime === "number" ? data.mtime : null);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setMessage("");
-    setError("");
-    setConflict(false);
-    try {
-      const resp = await api<{ ok: boolean; mtime: number }>("/api/config/system", {
-        method: "PUT",
-        body: { content, expected_mtime: mtime },
-      });
-      if (typeof resp?.mtime === "number") setMtime(resp.mtime);
-      setMessage("保存成功");
-    } catch (err: any) {
-      if (err?.code === "conflict") {
-        setConflict(true);
-        setError("配置已被外部修改，当前版本已过期");
-      } else {
-        setError(err.message || "保存失败");
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleTest = async () => {
-    setTesting(true);
-    setTestResult(null);
-    try {
-      const resp = await api<any>("/api/config/test-connection", { method: "POST" });
-      setTestResult(resp);
-    } catch (err: any) {
-      setTestResult({ error: err.message || "测试失败" });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  if (loading) return <div className="text-sm text-text-muted">加载中...</div>;
-
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={handleSave} disabled={saving} className="btn btn-primary">
-          {saving ? "保存中..." : "保存"}
-        </button>
-        <button onClick={handleTest} disabled={testing} className="btn text-xs">
-          {testing ? "测试中..." : "测试连接"}
-        </button>
-        {conflict && (
-          <button onClick={load} className="btn text-xs">
-            重新加载
-          </button>
-        )}
-        {message && <span className="text-xs text-success">{message}</span>}
-        {error && <span className="text-xs text-danger">{error}</span>}
-      </div>
-
-      {testResult && (
-        <div className="text-xs space-y-1 bg-bg-card border border-border rounded-md px-3 py-2">
-          {testResult.error && <div className="text-danger">✗ {testResult.error}</div>}
-          {testResult.llm && (
-            <div className={testResult.llm.ok ? "text-success" : "text-danger"}>
-              {testResult.llm.ok ? "✓" : "✗"} LLM [{testResult.llm.model}]
-              {testResult.llm.ok
-                ? ` ${testResult.llm.latency_ms}ms — "${testResult.llm.reply}"`
-                : ` ${testResult.llm.error}`}
-            </div>
-          )}
-          {testResult.search && (
-            <div className={testResult.search.ok ? "text-success" : "text-danger"}>
-              {testResult.search.ok ? "✓" : "✗"} 搜索 [{testResult.search.provider}]
-              {testResult.search.ok
-                ? ` ${testResult.search.latency_ms}ms — ${testResult.search.results} 条结果`
-                : ` ${testResult.search.error}`}
-            </div>
-          )}
-        </div>
-      )}
-
-      <Suspense fallback={<div className="text-sm text-text-muted py-6 text-center">加载编辑器...</div>}>
-        <YamlEditor value={content} onChange={setContent} height="calc(100vh - 340px)" />
-      </Suspense>
     </div>
   );
 }

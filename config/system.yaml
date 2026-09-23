@@ -15,7 +15,9 @@ ai:
   model: "deepseek-v4.1-flash"              # any OpenAI-compatible model id
   base_url: "https://opencode.ai/zen/go/v1"
   api_key_env: "LLM_API_KEY"                # env var holding the API key
-  embedding_model: ""                       # e.g. text-embedding-3-small; empty = keyword-only QA
+  embedding_model: "bge-m3:latest"          # empty = keyword-only QA (no semantic search)
+  embedding_base_url: "http://localhost:11434/v1"   # local Ollama embeddings
+  embedding_api_key_env: ""                 # Ollama needs no key
   timeout: 1800                             # per-request wall clock ceiling (s)
   request_timeout: 600                      # single HTTP attempt (s)
   max_tokens: 32768

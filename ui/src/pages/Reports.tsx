@@ -1,8 +1,36 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listReports, getReportTree, searchReports, getReportCategories, listTags, updateReportMeta } from "@/api";
 import { cn, formatTokens } from "@/lib/utils";
 import { Search, FileText, FolderOpen, Star } from "lucide-react";
+
+const UI_STATE_KEY = "ai-research-console:reports-ui";
+
+interface TreeUiState {
+  treeOpen: boolean;
+  treeScroll: number;
+  openDirs: string[] | null;
+  lastVisited: string | null;
+}
+
+function loadTreeUiState(): TreeUiState {
+  const fallback: TreeUiState = {
+    treeOpen: true, treeScroll: 0, openDirs: null, lastVisited: null,
+  };
+  try {
+    const raw = window.sessionStorage.getItem(UI_STATE_KEY);
+    if (!raw) return fallback;
+    const saved = JSON.parse(raw);
+    return {
+      treeOpen: typeof saved.treeOpen === "boolean" ? saved.treeOpen : true,
+      treeScroll: typeof saved.treeScroll === "number" ? saved.treeScroll : 0,
+      openDirs: Array.isArray(saved.openDirs) ? saved.openDirs : null,
+      lastVisited: typeof saved.lastVisited === "string" ? saved.lastVisited : null,
+    };
+  } catch {
+    return fallback;
+  }
+}
 
 /** Render an FTS5 snippet. Only the backend's <mark> tags are honored;
  *  everything else is escaped by React (no raw HTML injection). */
@@ -51,9 +79,64 @@ export function ReportsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
-  // Tree state
+  // Tree state (browsing position is remembered across navigation)
   const [tree, setTree] = useState<any[]>([]);
-  const [treeOpen, setTreeOpen] = useState(true);
+  const [ui, setUi] = useState<TreeUiState>(() => loadTreeUiState());
+  const { treeOpen, treeScroll, openDirs, lastVisited } = ui;
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const restoredRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(UI_STATE_KEY, JSON.stringify(ui));
+    } catch {
+      /* storage unavailable */
+    }
+  }, [ui]);
+
+  const patchUi = (patch: Partial<TreeUiState>) =>
+    setUi((prev) => ({ ...prev, ...patch }));
+
+  const toggleDir = (name: string) => {
+    setUi((prev) => {
+      const current = prev.openDirs ?? [];
+      return {
+        ...prev,
+        openDirs: current.includes(name)
+          ? current.filter((d) => d !== name)
+          : [...current, name],
+      };
+    });
+  };
+
+  // First visit: expand top-level directories, then remember the explicit set
+  useEffect(() => {
+    if (tree.length === 0 || ui.openDirs !== null) return;
+    setUi((prev) => (prev.openDirs === null
+      ? { ...prev, openDirs: tree.filter((e) => e.type === "dir").map((e) => e.name) }
+      : prev));
+  }, [tree, ui.openDirs]);
+
+  // Restore the scroll position once the tree content is rendered
+  useEffect(() => {
+    if (restoredRef.current || tree.length === 0 || !treeRef.current) return;
+    restoredRef.current = true;
+    if (treeScroll > 0) treeRef.current.scrollTop = treeScroll;
+    if (lastVisited) {
+      const nodes = Array.from(
+        treeRef.current.querySelectorAll<HTMLElement>("[data-path]"),
+      );
+      const target = nodes.find((el) => el.dataset.path === lastVisited);
+      if (target && typeof target.scrollIntoView === "function") {
+        target.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }, [tree, treeScroll, lastVisited]);
+
+  const openReport = (path: string) => {
+    patchUi({ lastVisited: path });
+    navigate(`/reports/view?path=${encodeURIComponent(path)}`);
+  };
 
   // Search state
   const [query, setQuery] = useState(searchParams.get("q") || "");
@@ -201,20 +284,27 @@ export function ReportsPage() {
         <div className="hidden lg:block w-56 shrink-0">
           <div className="card">
             <button
-              onClick={() => setTreeOpen(!treeOpen)}
+              onClick={() => patchUi({ treeOpen: !treeOpen })}
               className="flex items-center gap-2 w-full px-3 py-2 text-xs text-text-muted uppercase"
             >
               <FolderOpen className="w-3 h-3" />
               目录
             </button>
             {treeOpen && (
-              <div className="px-2 pb-2 text-xs max-h-[70vh] overflow-y-auto space-y-0.5">
+              <div
+                ref={treeRef}
+                onScroll={(e) => patchUi({ treeScroll: e.currentTarget.scrollTop })}
+                className="px-2 pb-2 text-xs max-h-[70vh] overflow-y-auto space-y-0.5"
+              >
                 {tree.map((entry) => (
                   <TreeEntry
                     key={entry.name}
                     entry={entry}
                     depth={0}
-                    onSelect={(path) => navigate(`/reports/view?path=${encodeURIComponent(path)}`)}
+                    openDirs={openDirs ?? []}
+                    activePath={lastVisited}
+                    onToggleDir={toggleDir}
+                    onSelect={openReport}
                   />
                 ))}
               </div>
@@ -295,7 +385,7 @@ export function ReportsPage() {
                 <div
                   key={item.path}
                   className="card px-4 py-3 hover:bg-bg-hover cursor-pointer transition"
-                  onClick={() => navigate(`/reports/view?path=${encodeURIComponent(item.path)}`)}
+                  onClick={() => openReport(item.path)}
                 >
                   <div className="flex items-start gap-3">
                     <FileText className="w-4 h-4 mt-0.5 shrink-0 text-text-muted" />
@@ -385,19 +475,24 @@ export function ReportsPage() {
 function TreeEntry({
   entry,
   depth,
+  openDirs,
+  activePath,
+  onToggleDir,
   onSelect,
 }: {
   entry: any;
   depth: number;
+  openDirs: string[];
+  activePath: string | null;
+  onToggleDir: (name: string) => void;
   onSelect: (path: string) => void;
 }) {
-  const [open, setOpen] = useState(depth < 1);
-
+  const open = openDirs.includes(entry.name);
   if (entry.type === "dir") {
     return (
       <div>
         <button
-          onClick={() => setOpen(!open)}
+          onClick={() => onToggleDir(entry.name)}
           className="flex items-center gap-1 w-full text-left px-2 py-1 rounded hover:bg-bg-hover"
           style={{ paddingLeft: `${8 + depth * 12}px` }}
         >
@@ -405,16 +500,30 @@ function TreeEntry({
           <span className="truncate">{entry.name}</span>
         </button>
         {open && entry.children?.map((child: any) => (
-          <TreeEntry key={child.name} entry={child} depth={depth + 1} onSelect={onSelect} />
+          <TreeEntry
+            key={child.name}
+            entry={child}
+            depth={depth + 1}
+            openDirs={openDirs}
+            activePath={activePath}
+            onToggleDir={onToggleDir}
+            onSelect={onSelect}
+          />
         ))}
       </div>
     );
   }
 
+  const active = activePath === entry.path;
   return (
     <button
       onClick={() => onSelect(entry.path)}
-      className="flex items-center gap-1 w-full text-left px-2 py-1 rounded hover:bg-bg-hover text-text-muted"
+      data-path={entry.path}
+      title={entry.path}
+      className={cn(
+        "flex items-center gap-1 w-full text-left px-2 py-1 rounded hover:bg-bg-hover text-text-muted",
+        active && "bg-accent/20 text-text",
+      )}
       style={{ paddingLeft: `${8 + depth * 12}px` }}
     >
       <FileText className="w-3 h-3 shrink-0" />

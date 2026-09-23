@@ -25,6 +25,40 @@ def list_scheduled(user=Depends(require_admin)):
     return {"jobs": jobs, "total": len(jobs)}
 
 
+@router.get("/jobs")
+def list_schedulable_jobs(user=Depends(require_admin)):
+    """List jobs that can be scheduled, with a ready-to-run command."""
+    import os
+
+    from core.config import list_jobs, load_job
+    from web.settings import get_settings
+
+    settings = get_settings()
+    jobs_dir = settings.paths.jobs_dir
+    project_dir = os.path.dirname(os.path.abspath(settings.paths.config_dir))
+    python = os.path.join(os.path.dirname(project_dir), ".AI_research", "bin", "python")
+
+    items = []
+    for name in list_jobs(jobs_dir):
+        job = load_job(jobs_dir, name) or {}
+        items.append({
+            "name": name,
+            "label": job.get("name") or name,
+            "description": job.get("description") or "",
+            "enabled": bool(job.get("enabled", True)),
+            "schedule_type": (job.get("schedule") or {}).get("type", "manual")
+            if isinstance(job.get("schedule"), dict) else "manual",
+            "command": f"cd {project_dir} && {python} run.py {name} "
+                       f">> logs/cron_{name.replace('/', '_')}.log 2>&1",
+        })
+
+    return {
+        "jobs": items,
+        "project_dir": project_dir,
+        "python": python,
+    }
+
+
 @router.post("")
 def add_scheduled(payload: dict, user=Depends(require_admin)):
     """Add a new scheduled cron job."""

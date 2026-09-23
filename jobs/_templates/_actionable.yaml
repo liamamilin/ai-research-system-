@@ -1,9 +1,7 @@
-# ── Actionable Research Template ──
-# Copy to jobs/actionable/ and customize.
-# Converts research insights into executable plans (~10-15 min).
-
 name: "<Topic> Action Plan"
-description: "Turn <topic> research into executable action plan"
+label: "决策与行动清单"
+category: "actionable"
+description: "研究到行动的转化：每项含做什么/为什么现在/负责人/验收/依赖，可直接进入跟踪"
 enabled: false
 keywords:
   - <keyword1>
@@ -11,23 +9,74 @@ keywords:
   - <keyword3>
 language: "zh"
 schedule:
-  type: "manual"
+  type: "weekly"
+  time: "09:00"
+  timezone: "Asia/Shanghai"
 runtime:
   timeout_seconds: 3600
   skip_if_running: true
 prompt: |
-  You are a research-to-action specialist. Create an executable plan for {name}.
+  你是 {name} 领域的技术战略顾问。你的读者要决定**下个月做什么**，因此每一条建议都必须可执行、可验收，且明确指出"如果什么都不做会怎样"。
 
-  Keywords: {keywords}
-  Language: {language}
+  ## 任务
+  基于以下关键词相关的最新信息，产出可直接进入执行的行动方案：
+  {keywords}
 
-  Generate an actionable report in Markdown covering:
-  1. **Goals** - specific, measurable objectives (3-5)
-  2. **Priority Matrix** - ranked by impact × feasibility
-  3. **Action Plan** - concrete steps with timelines (phased)
-  4. **Experiments** - specific experiments with hypotheses and expected outcomes
-  5. **Resources** - tools, data, compute, expertise needed
-  6. **Success Metrics** - KPIs and stopping criteria
+  信息基准时间：{date}；近期变化以 {date_7d_ago} 至 {date} 为主。
+  输出语言：{language}（技术名称保留英文原名）。
 
-  Every recommendation must be specific enough to act on immediately.
-output: "output/actionable/{date}_<topic>_actionable.md"
+  ## 行动生成规则
+  1. 每条行动必须是**具体动作**，而不是目标或方向。区别：❌"提升研发效率" → ✅"在 CI 中接入自动回归测试，覆盖 3 个核心服务的接口层"。
+  2. 每条行动必须回答：为什么是现在（触发事件/时间窗口）？不做的代价是什么？
+  3. 明确所需角色与能力（不是具体人名），以及预计投入（人日量级）。
+  4. 给出可判定的验收标准与完成时限。
+  5. 标注依赖关系与前置条件；无法并行的事项必须显式排序。
+  6. 明确区分：现在做 / 下个周期做 / 明确不做（并给出一句话理由）。
+
+  ## 证据规则
+  1. 每条行动的"为什么是现在"必须附来源 URL 与发布日期。
+  2. 量化收益（如可估算的时间/成本节省）必须给出计算口径；无法估算时标注"待验证"。
+  3. 厂商宣称的能力或收益标注"厂商自述，未独立验证"。
+
+  ## 输出结构
+  ### 1. 执行结论
+  不超过 200 字：下个月最该做的 3 件事，以及最重要的一个"不要做"。
+
+  ### 2. 行动总表
+  表格：优先级 | 行动 | 为什么是现在（来源/日期）| 所需角色 | 投入 | 验收标准 | 时限 | 依赖。
+
+  ### 3. 优先级判定依据
+  说明 P0/P1/P2 的划分标准，以及资源受限时应当如何取舍。
+
+  ### 4. 行动详述
+  每条行动展开：
+  - 目标与交付物（明确到可以验收）
+  - 关键步骤（3-6 条）
+  - 验收标准（可判定，含量化指标或可复现的检查方式）
+  - 风险与应对
+  - 前置依赖
+
+  ### 5. 依赖与顺序
+  表格：行动 | 依赖项 | 可并行性 | 阻塞影响。
+
+  ### 6. 明确不做的事
+  表格：不做的事 | 理由 | 重新评估的触发条件。
+
+  ### 7. 度量方式
+  如何判断这些行动产生了效果：指标 | 基线获取方式 | 目标 | 复盘节奏。
+
+  ### 8. 待验证假设
+  表格：假设 | 验证方法 | 验证成本 | 若不成立则如何调整。
+
+  ### 9. 来源清单
+  编号列表：标题 | 发布日期 | URL。
+
+  ## 质量红线
+  - 禁止输出"方向性建议"作为行动项。
+  - 禁止给出无验收标准的任务。
+  - 禁止编造收益数字、日期或 URL。
+  - 行动数量控制在 3-8 条，宁少勿滥。
+
+  ## 长度约束
+  2000-4000 字。
+output: "output/actionable/{date}_{name}.md"

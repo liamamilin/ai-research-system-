@@ -8,8 +8,8 @@
 # Usage:
 #   ./scripts/run_practical_intelligence.sh
 #
-# Cron (daily 06:00):
-#   0 6 * * * export PATH=/Users/milin/2026/AI_research/.AI_research/bin:/Users/milin/.nvm/versions/node/v22.21.1/bin:/usr/bin:/bin; cd /path/to/Base_CodingCLi && bash scripts/run_practical_intelligence.sh >> logs/cron_pipeline.log 2>&1
+# Cron (daily 06:00), adjust PROJECT_DIR / venv path:
+#   0 6 * * * cd /path/to/Base_CodingCLi && export PATH="$HOME/.AI_research/bin:$PATH" && bash scripts/run_practical_intelligence.sh >> logs/cron_pipeline.log 2>&1
 #
 # Environment:
 #   LLM_API_KEY         — LLM API key (referenced by ai.api_key_env in
@@ -140,6 +140,13 @@ echo ""
 echo "  --- [Stage 4] Synthesis ---"
 
 run_stage "P9" "practical_ai_intelligence/09_executive_synthesis_and_actions" || ALL_OK=false
+
+# ------------------------------------------------------------------
+# Round finish: artifacts + tracking + digest notification
+# ------------------------------------------------------------------
+echo ""
+echo "  --- [Finish] artifacts / tracking / digest ---"
+run_stage "FINISH" --round-finish || echo "  ⚠ [Finish] skipped or failed (non-fatal)"
 
 # ------------------------------------------------------------------
 # Summary

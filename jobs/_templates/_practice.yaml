@@ -1,35 +1,80 @@
-# ── Practice / Application Research Template ──
-# Copy to jobs/practice/ and customize.
-# Searches for real-world applications and implementations (~5-10 min).
-
-name: "<Topic> Practice"
-description: "Search for practical <topic> applications and implementations"
+name: "<Topic> Implementation Guide"
+label: "可执行落地方案"
+category: "practice"
+description: "从零到可用的操作手册：前置条件、分步命令、代码骨架、验收标准、常见坑"
 enabled: false
 keywords:
-  - <keyword1> applications
-  - <keyword2> implementation
-  - <keyword3> case studies
-  - <keyword4> deployment
+  - <keyword1>
+  - <keyword2>
+  - <keyword3>
 language: "zh"
 schedule:
-  type: "weekly"
-  time: "10:00"
+  type: "monthly"
+  time: "14:00"
   timezone: "Asia/Shanghai"
 runtime:
-  timeout_seconds: 3600
+  timeout_seconds: 5400
   skip_if_running: true
 prompt: |
-  You are a practical AI researcher. Search for real-world applications of {name}.
+  你是 {name} 领域的资深工程师，擅长把技术方案写成别人能照着做出来的操作手册。读者是你的同事，他要在自己的环境里真正跑通这件事，而不是理解原理。
 
-  Keywords: {keywords}
-  Language: {language}
+  ## 任务
+  针对以下关键词，给出从零到可用的完整落地方案：
+  {keywords}
 
-  Generate a practice-oriented report in Markdown covering:
-  1. **Real Applications** - deployed use cases with concrete examples
-  2. **Implementation Methods** - technical approaches, architectures
-  3. **Frameworks & Tools** - software, platforms, infrastructure used
-  4. **Challenges & Solutions** - problems encountered and how they were solved
-  5. **Resource Requirements** - what's needed to replicate
+  技术信息基准时间：{date}，以最近 180 天内的官方文档与版本为准。
+  输出语言：{language}（命令、代码、配置键、错误信息保留英文原样；说明文字用 {language}）。
 
-  Focus on concrete, practical, actionable information. Include source links.
-output: "output/practice/{date}_<topic>_practice.md"
+  ## 原则
+  1. 每一步都必须可验证：说明预期输出、预期耗时、如何判断成功。
+  2. 优先使用官方文档中的命令原文，禁止臆造参数名。无法确认的参数标注"需查证"。
+  3. 给出最小可运行示例（minimum viable），而不是理想化架构。
+  4. 版本敏感内容必须标明适用版本范围。
+
+  ## 输出结构
+  ### 1. 你要做什么
+  用不超过 150 字说明目标、最终交付物、以及读者完成后的能力。
+
+  ### 2. 前置条件
+  表格：依赖 | 版本要求 | 用途 | 安装/获取方式 | 来源。
+  包括系统要求、账号与密钥、硬件或本地模型等。
+
+  ### 3. 实施步骤
+  按顺序编号，每步包含：
+  - 目标（一句话）
+  - 命令或操作（代码块）
+  - 预期输出/现象
+  - 预计耗时
+  - 失败排查（该步骤最常见的一个错误及解法）
+
+  步骤总数控制在 8-12 步，覆盖最小可用闭环。
+
+  ### 4. 最小可运行代码
+  完整可复制运行的代码骨架，包含必要 import 与配置项说明；不要省略关键部分用"..."代替。
+
+  ### 5. 验收标准
+  表格：检查项 | 通过标准 | 验证方式。
+  至少包含一个"失败也能被正确处理"的负向用例。
+
+  ### 6. 常见坑
+  表格：症状 | 根因 | 解决方法 | 来源。
+  至少 5 条，优先引用 issue、FAQ、官方文档中的真实问题。
+
+  ### 7. 生产化注意事项
+  表格：方面 | 当前简化做法 | 生产环境需要补什么。
+
+  ### 8. 延伸与替代方案
+  2-3 个相关实现路径，简要对比取舍。
+
+  ### 9. 来源清单
+  编号列表：标题 | 类型（官方文档/issue/博客）| 日期 | URL。
+
+  ## 质量红线
+  - 禁止编造 API、参数、命令或版本号；不确定时必须标注"需查证"。
+  - 禁止给出无法运行的伪代码冒充可运行代码。
+  - 禁止跳过错误处理与验收环节。
+  - 禁止使用"很简单""只需几步"之类掩盖工作量的表述。
+
+  ## 长度约束
+  2500-5000 字，代码与命令不计入。
+output: "output/practice/{date}_{name}.md"

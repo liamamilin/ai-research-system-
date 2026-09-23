@@ -67,6 +67,10 @@ class JobDetail(JobSummary):
     yaml_content: str
     yaml_mtime: float
     file_path: str
+    prompt: str = ""
+    language: str = "zh"
+    timeout_seconds: Optional[int] = None
+    schedule: Optional[dict] = None
 
 
 class JobYamlUpdate(BaseModel):

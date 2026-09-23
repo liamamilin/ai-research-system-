@@ -15,6 +15,15 @@ interface CronJob {
   enabled: boolean;
 }
 
+interface SchedulableJob {
+  name: string;
+  label: string;
+  description: string;
+  enabled: boolean;
+  schedule_type: string;
+  command: string;
+}
+
 export function SchedulerPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,6 +32,8 @@ export function SchedulerPage() {
   const [showHelp, setShowHelp] = useState(false);
   const [newJob, setNewJob] = useState({ id: "", schedule: "", command: "" });
   const [msg, setMsg] = useState("");
+  const [schedulable, setSchedulable] = useState<SchedulableJob[]>([]);
+  const [jobQuery, setJobQuery] = useState("");
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -37,6 +48,29 @@ export function SchedulerPage() {
   };
 
   useEffect(() => { fetchJobs(); }, []);
+
+  useEffect(() => {
+    if (!showForm) return;
+    api<{ jobs: SchedulableJob[] }>("/api/scheduler/jobs")
+      .then((data) => setSchedulable(data.jobs || []))
+      .catch(() => setSchedulable([]));
+  }, [showForm]);
+
+  const filteredJobs = schedulable.filter((job) => {
+    const q = jobQuery.trim().toLowerCase();
+    if (!q) return true;
+    return job.name.toLowerCase().includes(q)
+      || job.label.toLowerCase().includes(q)
+      || job.description.toLowerCase().includes(q);
+  });
+
+  const applyJob = (job: SchedulableJob) => {
+    setNewJob((prev) => ({
+      ...prev,
+      id: prev.id || job.name.replace(/[^A-Za-z0-9_]/g, "_"),
+      command: prev.command || job.command,
+    }));
+  };
 
   const handleAdd = async () => {
     setMsg("");
@@ -228,6 +262,49 @@ export function SchedulerPage() {
 
       {showForm && (
         <div className="card p-4 space-y-3">
+          <div>
+            <label className="block text-xs text-text-muted mb-1">从已有 job 创建（推荐）</label>
+            <input
+              className="input"
+              placeholder="搜索 job 名称或描述…（如 radar、daily、practical）"
+              value={jobQuery}
+              onChange={(e) => setJobQuery(e.target.value)}
+            />
+            <div className="mt-2 max-h-44 overflow-y-auto space-y-1 border border-border rounded-md p-1.5">
+              {filteredJobs.length === 0 && (
+                <div className="text-xs text-text-muted px-2 py-2">
+                  {schedulable.length === 0 ? "正在读取 jobs…" : "没有匹配的 job"}
+                </div>
+              )}
+              {filteredJobs.map((job) => (
+                <button
+                  key={job.name}
+                  type="button"
+                  onClick={() => applyJob(job)}
+                  className="w-full text-left px-2 py-1.5 rounded hover:bg-bg-hover transition flex items-center gap-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-medium truncate">
+                      {job.label}
+                      <span className="ml-1.5 font-mono text-[10px] text-text-muted">{job.name}</span>
+                    </div>
+                    {job.description && (
+                      <div className="text-[10px] text-text-muted truncate">{job.description}</div>
+                    )}
+                  </div>
+                  {!job.enabled && (
+                    <span className="text-[10px] border border-border rounded px-1 text-text-muted shrink-0">
+                      已停用
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-text-muted/60 mt-1">
+              点击一个 job 会自动填好调度 ID 与命令（可再手动修改）
+            </p>
+          </div>
+
           <div>
             <label className="block text-xs text-text-muted mb-1">调度 ID</label>
             <input className="input" placeholder="如: daily_report, weekly_summary" value={newJob.id}

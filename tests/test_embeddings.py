@@ -97,3 +97,18 @@ def test_from_system_requires_model(monkeypatch):
     })
     assert client.model == "emb"
     assert client.api_key == "k"
+
+
+def test_from_system_supports_dedicated_embedding_endpoint(monkeypatch):
+    monkeypatch.setenv("EMB_KEY_TEST", "k")
+    client = EmbeddingClient.from_system({
+        "ai": {
+            "embedding_model": "bge-m3",
+            "base_url": "https://chat.example/v1",
+            "api_key_env": "EMB_KEY_TEST",
+            "embedding_base_url": "http://localhost:11434/v1",
+            "embedding_api_key_env": "",
+        },
+    })
+    assert client.base_url == "http://localhost:11434/v1"
+    assert client.api_key == ""

@@ -40,6 +40,23 @@ def parse_yaml(content: str) -> dict:
     return data
 
 
+def dump_yaml(data: dict) -> str:
+    """Serialize a dict to a YAML string (multi-line text keeps literal block style)."""
+    from io import StringIO
+
+    from ruamel.yaml.comments import CommentedMap
+    from ruamel.yaml.scalarstring import LiteralScalarString
+
+    if isinstance(data, dict):
+        data = CommentedMap(data)
+        for key, val in data.items():
+            if isinstance(val, str) and "\n" in val:
+                data[key] = LiteralScalarString(val)
+    buf = StringIO()
+    _yaml.dump(data, buf)
+    return buf.getvalue()
+
+
 def validate_yaml(data: dict) -> list[str]:
     """Soft validation. Returns a list of warning messages (empty = no issues)."""
     warnings: list[str] = []
@@ -80,12 +97,22 @@ def check_conflict(file_path: str, expected_mtime: float) -> Optional[float]:
     return None
 
 
+def _backup_dir() -> str:
+    """Resolve the backup directory from web settings when available."""
+    try:
+        from web.settings import get_settings
+        return os.path.join(get_settings().paths.state_dir, "backups")
+    except Exception:  # noqa: BLE001 - CLI usage without web settings
+        return BACKUP_DIR
+
+
 def save_backup(file_path: str, content: str) -> str:
     """Save a backup copy to state/backups/. Returns the backup path."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
+    backup_dir = _backup_dir()
+    os.makedirs(backup_dir, exist_ok=True)
     ts = time.strftime("%Y%m%d_%H%M%S")
     base = Path(file_path).stem
-    backup_path = os.path.join(BACKUP_DIR, f"{base}_{ts}.yaml")
+    backup_path = os.path.join(backup_dir, f"{base}_{ts}.yaml")
     try:
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(content)

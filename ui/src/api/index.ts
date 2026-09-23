@@ -64,8 +64,63 @@ export async function createJob(data: {
   return api("/api/jobs", { method: "POST", body: data });
 }
 
-export async function listTemplates(): Promise<{ templates: any[] }> {
+export interface JobTemplate {
+  key: string;
+  name: string;
+  filename: string;
+  label: string;
+  category: string;
+  description: string;
+  builtin: boolean;
+  variables: string[];
+  output_template: string;
+  updated_at: string;
+  job_name?: string;
+  prompt?: string;
+  keywords?: string[];
+  language?: string;
+  timeout_seconds?: number | null;
+  schedule?: Record<string, any> | null;
+  content: string;
+}
+
+export interface TemplateInput {
+  key?: string;
+  label?: string;
+  category?: string;
+  description?: string;
+  prompt?: string;
+  name?: string;
+  keywords?: string[];
+  language?: string;
+  output?: string;
+  timeout_seconds?: number;
+  schedule?: { type?: string; time?: string; timezone?: string } | null;
+}
+
+export async function listTemplates(): Promise<{ templates: JobTemplate[] }> {
   return api("/api/jobs/templates");
+}
+
+export async function createTemplate(data: TemplateInput): Promise<JobTemplate> {
+  return api("/api/jobs/templates", { method: "POST", body: data });
+}
+
+export async function updateTemplate(key: string, data: TemplateInput): Promise<JobTemplate> {
+  return api(`/api/jobs/templates/${encodeURIComponent(key)}`, { method: "PUT", body: data });
+}
+
+export async function deleteTemplate(key: string): Promise<{ ok: boolean; key: string }> {
+  return api(`/api/jobs/templates/${encodeURIComponent(key)}`, { method: "DELETE" });
+}
+
+export interface JobCategory {
+  name: string;
+  count: number;
+}
+
+export async function listJobCategories(): Promise<{ categories: JobCategory[] }> {
+  return api("/api/jobs/categories");
 }
 
 export async function cancelJob(name: string): Promise<{ ok: boolean; cancelled: boolean }> {

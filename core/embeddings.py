@@ -6,6 +6,13 @@ Configured via ``system.yaml``::
       embedding_model: "text-embedding-3-small"   # empty = semantic features off
       base_url: "https://api.openai.com/v1"
       api_key_env: "LLM_API_KEY"
+
+Embeddings may live on a different endpoint than the chat model::
+
+    ai:
+      embedding_model: "bge-m3:latest"
+      embedding_base_url: "http://localhost:11434/v1"
+      embedding_api_key_env: ""   # local Ollama needs no key
 """
 
 from __future__ import annotations
@@ -48,11 +55,15 @@ class EmbeddingClient:
         model = (ai.get("embedding_model") or "").strip()
         if not model:
             raise EmbeddingError("ai.embedding_model is not configured")
-        api_key_env = ai.get("api_key_env") or ""
+        base_url = (ai.get("embedding_base_url") or ai.get("base_url") or "").strip()
+        if "embedding_api_key_env" in ai:
+            api_key_env = ai.get("embedding_api_key_env") or ""
+        else:
+            api_key_env = ai.get("api_key_env") or ""
         api_key = os.environ.get(api_key_env, "") if api_key_env else ""
         return cls(
             model=model,
-            base_url=ai.get("base_url") or "",
+            base_url=base_url,
             api_key=api_key,
             timeout=int(ai.get("embedding_timeout", 60)),
         )

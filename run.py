@@ -55,6 +55,10 @@ Templates: copy from jobs/_templates/ to create new jobs""",
                         "(exit 1 when exceeded and block_pipeline is on)")
     p.add_argument("--test-notify", action="store_true",
                    help="Send a test notification to every configured channel")
+    p.add_argument("--round-finish", nargs="?", const=True, default=False,
+                   metavar="DATE",
+                   help="Export artifacts, sync tracking and send the digest "
+                        "for a finished pipeline round (default: today)")
     p.add_argument("--timeout", "-t", type=int, help="Override AI timeout in seconds (default: from system.yaml)")
     p.add_argument("--status", nargs="?", const=True, default=False,
                    metavar="JOB",
@@ -160,6 +164,25 @@ def main():
         if status["exceeded"] and status["block_pipeline"]:
             print("  ✗ monthly budget exceeded — blocking")
             sys.exit(1)
+        sys.exit(0)
+
+    if args.round_finish is not False:
+        from core.round_finish import finish_round
+
+        date = (args.round_finish if isinstance(args.round_finish, str)
+                else datetime.now().strftime("%Y-%m-%d"))
+        summary = finish_round(
+            date,
+            output_dir=(sys_cfg.get("defaults") or {}).get("output_dir", "output"),
+            config_dir=args.config_dir,
+        )
+        if not summary["artifacts"]:
+            print(f"  no round documents found for {date}")
+            sys.exit(1)
+        tracking = summary["tracking"] or {}
+        print(f"  ✓ artifacts exported for {date}; tracking: "
+              f"{tracking.get('new', 0)} new / {tracking.get('updated', 0)} updated; "
+              f"digest notified: {'yes' if summary['notified'] else 'no'}")
         sys.exit(0)
 
     if args.test_notify:
