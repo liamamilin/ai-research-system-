@@ -112,6 +112,9 @@ class ResearchEngine:
                 print(f"  [{job_name}] Building prompt...")
                 output_path = self._resolve_output_path(job)
                 prompt = self._build_prompt(job)
+                source_block = self._fetch_sources_block(job)
+                if source_block:
+                    prompt = f"{prompt}\n\n{source_block}"
                 logger.debug("Prompt built: %d chars", len(prompt))
                 if verbose:
                     logger.debug("Prompt preview:\n%s", prompt[:500])
@@ -285,6 +288,27 @@ class ResearchEngine:
     # ------------------------------------------------------------------
     # Prompt building
     # ------------------------------------------------------------------
+
+    def _fetch_sources_block(self, job: dict) -> str:
+        """Pre-fetch job ``sources`` (RSS/GitHub/arXiv/HN) into prompt context."""
+        specs = job.get("sources") or []
+        if not specs:
+            return ""
+        try:
+            from .search import SearchClient
+            from .sources import fetch_all
+
+            limit = int(job.get("sources_limit", 8))
+            results = fetch_all(list(specs), limit_per_source=limit)
+            if not results:
+                return ""
+            logger.info("Sources pre-fetched: %d items from %d spec(s)",
+                        len(results), len(specs))
+            return ("## Pre-fetched subscription sources\n\n"
+                    + SearchClient.format_results(results))
+        except Exception as exc:  # noqa: BLE001 - sources are optional context
+            logger.warning("Sources pre-fetch skipped: %s", exc)
+            return ""
 
     def _build_prompt(self, job: dict) -> str:
         """Render the prompt template with job variables."""

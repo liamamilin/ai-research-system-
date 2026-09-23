@@ -250,19 +250,42 @@ def start_round(config_dir: str, jobs_dir: str, concurrency: int = 3,
     return _public_state(state)
 
 
-def _notify_round(state: dict, results: dict[str, str]) -> None:
+def _notify_round(state: dict, results: dict[str, str],
+                  config_dir: str = "config") -> None:
     """Best-effort round summary notification (webhook)."""
     try:
+        from core.config import load_system_config
         from core.notify import send
 
         failed = [k for k, v in results.items() if v != "success"]
         summary = f"状态 {state['status']} · 完成 {len(results) - len(failed)}/{len(results)}"
         if failed:
             summary += " · 失败: " + ", ".join(failed)
+
+        message = summary
+        try:
+            sys_cfg = load_system_config(config_dir)
+            digest_cfg = (sys_cfg.get("notifications") or {}).get("digest") or {}
+            if digest_cfg.get("enabled", True):
+                from core.digest import digest_for_round
+
+                output_dir = (sys_cfg.get("defaults") or {}).get(
+                    "output_dir", "output")
+                digest = digest_for_round(
+                    state["date"], output_dir,
+                    pipeline_dir=PIPELINE_DIR,
+                    results=results,
+                    max_actions=int(digest_cfg.get("max_actions", 5)),
+                )
+                if digest:
+                    message = digest["text"]
+        except Exception as exc:  # noqa: BLE001 - digest is optional
+            logger.debug("Round digest skipped: %s", exc)
+
         send(
             "round_finished",
             f"情报轮次 {state['date']}",
-            summary,
+            message,
             fields={
                 "date": state["date"],
                 "status": state["status"],
@@ -282,10 +305,33 @@ def _export_round_artifacts(state: dict, config_dir: str) -> None:
         output_dir = (load_system_config(config_dir).get("defaults") or {}).get(
             "output_dir", "output")
         round_dir = os.path.join(output_dir, PIPELINE_DIR, state["date"])
-        if export_round_artifacts(round_dir, date=state["date"]):
+        written = export_round_artifacts(round_dir, date=state["date"])
+        if written:
             logger.info("Round %s artifacts exported", state["date"])
+            _sync_round_tracking(state["date"], written)
     except Exception as exc:  # noqa: BLE001 - artifacts are best-effort
         logger.warning("Round %s artifact export failed: %s", state["date"], exc)
+
+
+def _sync_round_tracking(date: str, written: dict) -> None:
+    """Feed exported artifacts into the tracking store (best-effort)."""
+    try:
+        from core import tracking
+        from web.settings import get_settings
+
+        tracking.use_state_dir(get_settings().paths.state_dir)
+        actions_payload = written.get("action_items.json") or {}
+        watchlist_payload = written.get("watchlist.json") or {}
+        counts = tracking.sync_round(
+            date,
+            actions_payload.get("actions"),
+            actions_payload.get("tests"),
+            watchlist_payload.get("items"),
+        )
+        logger.info("Round %s tracking synced (%d new, %d updated)",
+                    date, counts["new"], counts["updated"])
+    except Exception as exc:  # noqa: BLE001 - tracking is best-effort
+        logger.warning("Round %s tracking sync failed: %s", date, exc)
 
 
 def _stages_needing_rerun(file_stages: dict, previous: dict) -> list[str]:
@@ -462,8 +508,8 @@ def _run_round(state: dict, config_dir: str, jobs_dir: str, concurrency: int,
             state["finished_at"] = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
         _persist(state)
-        _notify_round(state, results)
         _export_round_artifacts(state, config_dir)
+        _notify_round(state, results, config_dir)
         logger.info("Round %s finished: %s (failed: %s)",
                     state["date"], state["status"], ", ".join(failed) or "none")
     except Exception as exc:  # noqa: BLE001 - never kill the server

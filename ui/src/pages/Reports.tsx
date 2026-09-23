@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { listReports, getReportTree, searchReports, getReportCategories } from "@/api";
+import { listReports, getReportTree, searchReports, getReportCategories, listTags, updateReportMeta } from "@/api";
 import { cn, formatTokens } from "@/lib/utils";
-import { Search, FileText, FolderOpen } from "lucide-react";
+import { Search, FileText, FolderOpen, Star } from "lucide-react";
 
 /** Render an FTS5 snippet. Only the backend's <mark> tags are honored;
  *  everything else is escaped by React (no raw HTML injection). */
@@ -63,11 +63,28 @@ export function ReportsPage() {
 
   const [category, setCategory] = useState("");
   const [categories, setCategories] = useState<string[]>([]);
+  const [scope, setScope] = useState<"all" | "fav" | "unread">("all");
+  const [tag, setTag] = useState("");
+  const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
 
-  const fetchReports = useCallback(async (pageNum: number, cat?: string) => {
+  const fetchReports = useCallback(async (
+    pageNum: number,
+    cat?: string,
+    scopeArg?: "all" | "fav" | "unread",
+    tagArg?: string,
+  ) => {
+    const activeScope = scopeArg ?? scope;
+    const activeTag = tagArg ?? tag;
     setLoading(true);
     try {
-      const data = await listReports({ page: pageNum, per_page: 20, category: cat || undefined });
+      const data = await listReports({
+        page: pageNum,
+        per_page: 20,
+        category: cat || undefined,
+        favorite: activeScope === "fav" ? true : undefined,
+        unread: activeScope === "unread" ? true : undefined,
+        tag: activeTag || undefined,
+      });
       setReports(data.items);
       setTotal(data.total);
       setPages(data.pages);
@@ -76,21 +93,47 @@ export function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope, tag]);
 
   const fetchTree = useCallback(async () => {
     try {
-      const [treeData, cats] = await Promise.all([
+      const [treeData, cats, tagData] = await Promise.all([
         getReportTree(),
         getReportCategories(),
+        listTags().catch(() => ({ tags: [] })),
       ]);
       setTree(treeData);
       setCategories(cats);
+      setTags(tagData.tags || []);
     } catch {
       setTree([]);
       setCategories([]);
     }
   }, []);
+
+  const handleScope = (next: "all" | "fav" | "unread") => {
+    setScope(next);
+    setPage(1);
+    fetchReports(1, category, next);
+  };
+
+  const handleTagFilter = (next: string) => {
+    const value = tag === next ? "" : next;
+    setTag(value);
+    setPage(1);
+    fetchReports(1, category, scope, value);
+  };
+
+  const toggleFavorite = async (item: any) => {
+    const next = !item.favorite;
+    setReports((prev) => prev.map((r) => (r.path === item.path ? { ...r, favorite: next } : r)));
+    try {
+      await updateReportMeta(item.path, { favorite: next });
+      if (scope === "fav" && !next) fetchReports(page, category, scope);
+    } catch {
+      setReports((prev) => prev.map((r) => (r.path === item.path ? { ...r, favorite: !next } : r)));
+    }
+  };
 
   useEffect(() => {
     fetchTree();
@@ -181,6 +224,35 @@ export function ReportsPage() {
 
         {/* Main content */}
         <div className="flex-1 min-w-0">
+          {/* Scope + tag filters */}
+          {!isSearching && (
+            <div className="flex flex-wrap items-center gap-1.5 mb-3">
+              {([["all", "全部"], ["fav", "星标"], ["unread", "未读"]] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => handleScope(key)}
+                  className={cn("badge border cursor-pointer hover:bg-bg-hover",
+                    scope === key ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+              {tags.length > 0 && <span className="text-border px-1">|</span>}
+              {tags.slice(0, 12).map((t) => (
+                <button
+                  key={t.tag}
+                  onClick={() => handleTagFilter(t.tag)}
+                  className={cn("badge border cursor-pointer hover:bg-bg-hover",
+                    tag === t.tag ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                  )}
+                >
+                  #{t.tag} <span className="opacity-60">{t.count}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {/* Category pills */}
           {!isSearching && (
             <div className="flex flex-wrap gap-1.5 mb-3">
@@ -228,8 +300,16 @@ export function ReportsPage() {
                   <div className="flex items-start gap-3">
                     <FileText className="w-4 h-4 mt-0.5 shrink-0 text-text-muted" />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate">
+                      <div className="text-sm font-medium truncate flex items-center gap-2">
+                        {!item.read && item.read !== undefined && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-accent inline-block shrink-0" title="未读" />
+                        )}
                         {item.title || item.path.split("/").pop()}
+                        {(item.tags || []).map((t: string) => (
+                          <span key={t} className="text-[10px] text-text-muted border border-border rounded px-1 shrink-0">
+                            #{t}
+                          </span>
+                        ))}
                       </div>
                       <div className="text-xs text-text-muted mt-0.5 flex flex-wrap gap-2">
                         <span>{item.path}</span>
@@ -248,6 +328,14 @@ export function ReportsPage() {
                         {item.snippet && <Snippet html={String(item.snippet)} />}
                       </div>
                     </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleFavorite(item); }}
+                      className="p-1 rounded hover:bg-bg-card transition shrink-0"
+                      title={item.favorite ? "取消星标" : "加星标"}
+                    >
+                      <Star className={cn("w-4 h-4",
+                        item.favorite ? "fill-current text-warning" : "text-text-muted")} />
+                    </button>
                   </div>
                 </div>
               ))}

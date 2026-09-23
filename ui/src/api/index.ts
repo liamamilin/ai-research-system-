@@ -83,8 +83,95 @@ export async function listReports(params?: {
   per_page?: number;
   category?: string;
   job?: string;
+  favorite?: boolean;
+  tag?: string;
+  unread?: boolean;
 }): Promise<{ items: any[]; total: number; page: number; pages: number }> {
   return api("/api/reports", { query: params as any });
+}
+
+export async function getReportMeta(path: string): Promise<any> {
+  return api("/api/reports/meta", { query: { path } });
+}
+
+export async function updateReportMeta(
+  path: string,
+  payload: { favorite?: boolean; tags?: string[]; read?: boolean; rating?: number; rating_note?: string },
+): Promise<any> {
+  return api("/api/reports/meta", { method: "PATCH", body: { path, ...payload } });
+}
+
+export async function listTags(): Promise<{ tags: { tag: string; count: number }[] }> {
+  return api("/api/reports/tags");
+}
+
+export async function createShareLink(
+  path: string,
+  ttlHours = 168,
+): Promise<{ token: string; path: string; expires_at: number; url: string }> {
+  return api("/api/reports/share", {
+    method: "POST",
+    body: { path, ttl_hours: ttlHours },
+  });
+}
+
+export async function emailReport(path: string, to?: string[]): Promise<{ ok: boolean }> {
+  return api("/api/reports/email", {
+    method: "POST",
+    body: to && to.length ? { path, to } : { path },
+  });
+}
+
+export interface SetupStatus {
+  needs_admin: boolean;
+  llm_configured: boolean;
+  search_configured: boolean;
+}
+
+export async function getSetupStatus(): Promise<SetupStatus> {
+  return api("/api/setup/status");
+}
+
+export interface QaCitation {
+  index: number;
+  path: string;
+  title: string;
+  snippet: string;
+  source: string;
+  score: number;
+}
+
+export interface QaAnswer {
+  answer: string;
+  citations: QaCitation[];
+  mode: string;
+  usage?: Record<string, number>;
+}
+
+export async function askQuestion(question: string, limit = 6): Promise<QaAnswer> {
+  return api("/api/qa", { method: "POST", body: { question }, query: { limit } });
+}
+
+export async function reindexVectors(limit = 200): Promise<{
+  embedded: number;
+  skipped: number;
+  failed: number;
+  stats: { documents: number; chunks: number };
+}> {
+  return api("/api/qa/reindex", { method: "POST", query: { limit } });
+}
+
+export interface SharedReport {
+  path: string;
+  title: string;
+  content: string;
+  size: number;
+  expires_at: number | null;
+  shared_by: string;
+}
+
+export async function getSharedReport(token: string): Promise<SharedReport> {
+  return api(`/api/share/${encodeURIComponent(token)}`);
 }
 
 export async function getReportTree(): Promise<any[]> {
@@ -138,6 +225,16 @@ export interface UsageSummary {
 
 export async function getUsage(days = 30): Promise<UsageSummary> {
   return api("/api/usage", { query: { days } });
+}
+
+export interface RatingSummary {
+  count: number;
+  average: number | null;
+  per_job: { job_name: string; count: number; average: number }[];
+}
+
+export async function getRatings(): Promise<RatingSummary> {
+  return api("/api/usage/ratings");
 }
 
 // --- Pipeline rounds ---
@@ -195,6 +292,66 @@ export async function cancelRound(): Promise<{ ok: boolean }> {
 
 export async function retryRound(concurrency = 3): Promise<Round["live"]> {
   return api("/api/pipeline/retry", { method: "POST", body: { concurrency } });
+}
+
+// --- Round item tracking ---
+
+export interface TrackedItem {
+  id: string;
+  kind: "action" | "test" | "watch";
+  text: string;
+  priority: string;
+  first_seen: string;
+  last_seen: string;
+  times_seen: number;
+  status: "open" | "done" | "dropped";
+  note: string;
+  updated_at: string;
+}
+
+export interface CarryOver {
+  date: string | null;
+  new: TrackedItem[];
+  continuing: TrackedItem[];
+  open_stale: TrackedItem[];
+}
+
+export async function getTrackedItems(params?: {
+  kind?: string;
+  status?: string;
+  limit?: number;
+}): Promise<{ items: TrackedItem[]; carry_over: CarryOver }> {
+  return api("/api/pipeline/actions", { query: params as Record<string, string | number | undefined> });
+}
+
+export async function updateTrackedItem(
+  id: string,
+  payload: { status?: string; note?: string },
+): Promise<TrackedItem> {
+  return api(`/api/pipeline/actions/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+}
+
+export interface DiffRow {
+  [key: string]: string;
+}
+
+export interface RoundDiff {
+  from: string | null;
+  to: string;
+  actions: { added: DiffRow[]; removed: DiffRow[]; persisted: DiffRow[] };
+  tests: { added: DiffRow[]; removed: DiffRow[]; persisted: DiffRow[] };
+  watchlist: { added: DiffRow[]; removed: DiffRow[]; persisted: DiffRow[] };
+  sources: { added: string[]; removed: string[]; new_domains: string[] };
+  counts: Record<string, number>;
+}
+
+export async function getRoundDiff(date: string, against?: string): Promise<RoundDiff> {
+  return api(`/api/pipeline/rounds/${encodeURIComponent(date)}/diff`, {
+    query: against ? { against } : undefined,
+  });
 }
 
 // --- Account / user management ---

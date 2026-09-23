@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from typing import Iterator
+from typing import Iterator, Optional
 
 _DB_PATH_OVERRIDE: str | None = None
 _lock = threading.Lock()
@@ -38,6 +39,22 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+_EXTRA_COLUMNS = (
+    ("favorite", "INTEGER NOT NULL DEFAULT 0"),
+    ("tags", "TEXT NOT NULL DEFAULT ''"),
+    ("read_at", "REAL"),
+    ("rating", "INTEGER NOT NULL DEFAULT 0"),
+    ("rating_note", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(reports)")}
+    for name, ddl in _EXTRA_COLUMNS:
+        if name not in existing:
+            conn.execute(f"ALTER TABLE reports ADD COLUMN {name} {ddl}")
+
+
 def init_db():
     """Create tables and FTS5 virtual table if they don't exist."""
     with _lock, connect() as conn:
@@ -62,6 +79,18 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_reports_category ON reports(category);
     """
         )
+        _ensure_columns(conn)
+
+
+def _serialize_row(row: sqlite3.Row) -> dict:
+    data = dict(row)
+    try:
+        data["tags"] = json.loads(data.get("tags") or "[]")
+    except (ValueError, TypeError):
+        data["tags"] = []
+    data["favorite"] = bool(data.get("favorite"))
+    data["read"] = bool(data.get("read_at"))
+    return data
 
 
 # ----- CRUD -----
@@ -121,11 +150,20 @@ def remove_report(path: str):
         conn.execute("DELETE FROM reports WHERE path = ?", (path,))
 
 
+def sanitize_fts_query(query: str) -> str:
+    """Quote each term so FTS5 operators (-, :, *, etc.) can't break the query."""
+    tokens = [t for t in (query or "").split() if t]
+    return " ".join('"' + t.replace('"', '""') + '"' for t in tokens)
+
+
 def search_reports(query: str, limit: int = 20) -> list[dict]:
     """Full-text search across report titles and content using FTS5.
 
     Returns results with highlighted snippets.
     """
+    safe_query = sanitize_fts_query(query)
+    if not safe_query:
+        return []
     with connect() as conn:
         rows = conn.execute(
             """
@@ -136,6 +174,9 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
                 r.category,
                 r.size_bytes,
                 r.mtime,
+                r.favorite,
+                r.tags,
+                r.read_at,
                 snippet(reports_fts, 1, '<mark>', '</mark>', '...', 40) AS snippet
             FROM reports_fts
             JOIN reports r ON r.rowid = reports_fts.rowid
@@ -143,9 +184,96 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
             ORDER BY rank
             LIMIT ?
             """,
-            (query, limit),
+            (safe_query, limit),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_serialize_row(r) for r in rows]
+
+
+def get_report(path: str) -> Optional[dict]:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM reports WHERE path = ?", (path,)).fetchone()
+    return _serialize_row(row) if row else None
+
+
+def set_report_meta(
+    path: str,
+    favorite: Optional[bool] = None,
+    tags: Optional[list[str]] = None,
+    read: Optional[bool] = None,
+    rating: Optional[int] = None,
+    rating_note: Optional[str] = None,
+) -> Optional[dict]:
+    """Update favorite / tags / read / rating state of one report."""
+    import time
+
+    fields: list[str] = []
+    params: list = []
+    if favorite is not None:
+        fields.append("favorite = ?")
+        params.append(1 if favorite else 0)
+    if tags is not None:
+        cleaned = sorted({t.strip() for t in tags if t and t.strip()})
+        fields.append("tags = ?")
+        params.append(json.dumps(cleaned, ensure_ascii=False))
+    if read is not None:
+        fields.append("read_at = ?")
+        params.append(time.time() if read else None)
+    if rating is not None:
+        fields.append("rating = ?")
+        params.append(max(0, min(int(rating), 5)))
+    if rating_note is not None:
+        fields.append("rating_note = ?")
+        params.append(rating_note[:500])
+
+    if not fields:
+        return get_report(path)
+
+    with connect() as conn:
+        cur = conn.execute(
+            f"UPDATE reports SET {', '.join(fields)} WHERE path = ?",
+            params + [path],
+        )
+        if cur.rowcount == 0:
+            return None
+        row = conn.execute("SELECT * FROM reports WHERE path = ?", (path,)).fetchone()
+    return _serialize_row(row)
+
+
+def rating_summary() -> dict:
+    """Average report rating overall and per job."""
+    with connect() as conn:
+        overall = conn.execute(
+            "SELECT COUNT(*) AS cnt, AVG(rating) AS avg FROM reports WHERE rating > 0"
+        ).fetchone()
+        per_job = conn.execute(
+            "SELECT job_name, COUNT(*) AS cnt, AVG(rating) AS avg FROM reports"
+            " WHERE rating > 0 AND job_name != '' GROUP BY job_name"
+            " ORDER BY avg DESC"
+        ).fetchall()
+    return {
+        "count": overall["cnt"] or 0,
+        "average": round(overall["avg"], 2) if overall["avg"] is not None else None,
+        "per_job": [
+            {"job_name": r["job_name"], "count": r["cnt"],
+             "average": round(r["avg"], 2)}
+            for r in per_job
+        ],
+    }
+
+
+def list_tags() -> list[dict]:
+    """All tags with usage counts."""
+    counts: dict[str, int] = {}
+    with connect() as conn:
+        rows = conn.execute("SELECT tags FROM reports WHERE tags != ''").fetchall()
+    for row in rows:
+        try:
+            for tag in json.loads(row["tags"]):
+                counts[tag] = counts.get(tag, 0) + 1
+        except (ValueError, TypeError):
+            continue
+    return [{"tag": tag, "count": count}
+            for tag, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
 def list_reports(
@@ -153,6 +281,9 @@ def list_reports(
     per_page: int = 20,
     category: str | None = None,
     job_name: str | None = None,
+    favorite: bool | None = None,
+    tag: str | None = None,
+    unread: bool | None = None,
 ) -> dict:
     """Paginated list of reports with optional filters."""
     where_parts: list[str] = []
@@ -164,6 +295,14 @@ def list_reports(
     if job_name:
         where_parts.append("job_name = ?")
         params.append(job_name)
+    if favorite is not None:
+        where_parts.append("favorite = ?")
+        params.append(1 if favorite else 0)
+    if tag:
+        where_parts.append("tags LIKE ?")
+        params.append(f"%{json.dumps(tag, ensure_ascii=False)}%")
+    if unread is not None:
+        where_parts.append("read_at IS " + ("NULL" if unread else "NOT NULL"))
 
     where = ""
     if where_parts:
@@ -182,7 +321,7 @@ def list_reports(
         ).fetchall()
 
     return {
-        "items": [dict(r) for r in rows],
+        "items": [_serialize_row(r) for r in rows],
         "total": total,
         "page": page,
         "per_page": per_page,

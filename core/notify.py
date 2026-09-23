@@ -333,6 +333,24 @@ def send(
     return delivered
 
 
+def send_report(title: str, markdown_text: str,
+                to_addrs: Optional[list] = None,
+                sys_config: Optional[dict] = None) -> bool:
+    """Email a report body through the configured SMTP channel.
+
+    Explicit user action: ignores the top-level ``enabled`` switch but still
+    requires the email channel to be configured.
+    """
+    cfg = _config(sys_config)
+    email_cfg = dict(cfg.get("email") or {})
+    if to_addrs:
+        email_cfg["to_addrs"] = list(to_addrs)
+    if not (email_cfg.get("enabled") and email_cfg.get("smtp_host")
+            and email_cfg.get("to_addrs")):
+        raise RuntimeError("email channel not configured")
+    return _send_email({"email": email_cfg}, title, markdown_text)
+
+
 def send_test(sys_config: Optional[dict] = None) -> dict:
     """Send a test message and report per-channel delivery results."""
     cfg = _config(sys_config)

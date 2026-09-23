@@ -132,6 +132,62 @@ def test_export_without_p9_still_writes_sources(tmp_path):
     assert written[artifacts.SOURCES_FILE]["total_unique"] == 1
 
 
+def _round(tmp_path, date: str, actions: list, watch: list, urls: list):
+    round_dir = tmp_path / date
+    round_dir.mkdir(parents=True)
+    (round_dir / artifacts.ACTION_FILE).write_text(
+        json.dumps({"actions": actions, "tests": []}), encoding="utf-8")
+    (round_dir / artifacts.WATCHLIST_FILE).write_text(
+        json.dumps({"items": watch}), encoding="utf-8")
+    (round_dir / artifacts.SOURCES_FILE).write_text(
+        json.dumps({"sources": [{"url": u} for u in urls]}), encoding="utf-8")
+    return round_dir
+
+
+def test_diff_rounds_detects_changes(tmp_path):
+    a = _round(tmp_path, "2026-01-01",
+               [{"action": "1. 迁移模型", "priority": "P0"},
+                {"action": "旧行动"}],
+               [{"topic": "旧议题"}],
+               ["https://a.test/1", "https://old.test/x"])
+    b = _round(tmp_path, "2026-01-08",
+               [{"action": "迁移模型", "priority": "P0"},
+                {"action": "新行动", "priority": "P1"}],
+               [{"topic": "新议题"}, {"topic": "旧议题"}],
+               ["https://a.test/1", "https://new.test/y"])
+
+    diff = artifacts.diff_rounds(str(a), str(b))
+    assert diff["from"] == "2026-01-01" and diff["to"] == "2026-01-08"
+    assert [x["action"] for x in diff["actions"]["added"]] == ["新行动"]
+    assert [x["action"] for x in diff["actions"]["removed"]] == ["旧行动"]
+    assert [x["action"] for x in diff["actions"]["persisted"]] == ["迁移模型"]
+    assert [x["topic"] for x in diff["watchlist"]["added"]] == ["新议题"]
+    assert diff["sources"]["added"] == ["https://new.test/y"]
+    assert diff["sources"]["removed"] == ["https://old.test/x"]
+    assert diff["sources"]["new_domains"] == ["new.test"]
+    assert diff["counts"]["actions_added"] == 1
+
+
+def test_diff_rounds_falls_back_to_markdown(tmp_path):
+    a = tmp_path / "2026-01-01"
+    a.mkdir()
+    (a / "09_executive_synthesis_and_actions.md").write_text(
+        "## 2. 立即行动（Immediate Actions）\n\n"
+        "| 行动 | 优先级 |\n|---|---|\n| 迁移模型 | P0 |\n\n"
+        "## 9. 观察清单（Watchlist）\n\n"
+        "| 议题 | 观察点 |\n|---|---|\n| 旧议题 | x |\n",
+        encoding="utf-8")
+    b = _round(tmp_path, "2026-01-08", [{"action": "迁移模型"}], [], [])
+
+    diff = artifacts.diff_rounds(str(a), str(b))
+    assert diff["actions"]["persisted"][0]["action"] == "迁移模型"
+    assert diff["watchlist"]["removed"][0]["topic"] == "旧议题"
+
+
+def test_diff_rounds_missing_dir_returns_none(tmp_path):
+    assert artifacts.diff_rounds(str(tmp_path / "nope"), str(tmp_path)) is None
+
+
 def test_export_missing_dir_returns_none(tmp_path):
     assert artifacts.export_round_artifacts(str(tmp_path / "nope")) is None
 

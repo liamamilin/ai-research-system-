@@ -30,3 +30,12 @@ prompt: |
 
   Keep it brief and signal-focused. Use bullet points.
 output: "output/monitoring/{date}_<topic>_daily.md"
+
+# Optional subscription sources (pre-fetched into the prompt context):
+#   rss:https://example.com/feed.xml
+#   github:owner/repo
+#   arxiv:agent memory
+#   hn:llm agents
+# sources:
+#   - github:openai/openai-python
+#   - rss:https://blog.example.com/rss.xml

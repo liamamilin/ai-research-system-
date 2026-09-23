@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listJobs, getUsage, getReportStats, type UsageSummary } from "@/api";
+import { listJobs, getUsage, getReportStats, getRatings, type UsageSummary, type RatingSummary } from "@/api";
 import type { JobSummary } from "@/api/types";
 import { cn, timeAgo, formatTokens } from "@/lib/utils";
 
@@ -22,6 +22,7 @@ export function DashboardPage() {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [reportStats, setReportStats] = useState<{ total: number; total_size_bytes: number; categories: number } | null>(null);
+  const [ratings, setRatings] = useState<RatingSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export function DashboardPage() {
       .finally(() => setLoading(false));
     getUsage(30).then(setUsage).catch(() => setUsage(null));
     getReportStats().then(setReportStats).catch(() => setReportStats(null));
+    getRatings().then(setRatings).catch(() => setRatings(null));
   }, []);
 
   const total = jobs.length;
@@ -95,6 +97,9 @@ export function DashboardPage() {
       {reportStats && (
         <div className="card px-4 py-2.5 text-xs text-text-muted">
           报告库：{reportStats.total} 篇 · {(reportStats.total_size_bytes / 1024 / 1024).toFixed(1)} MB · {reportStats.categories} 个分类
+          {ratings && ratings.count > 0 && ratings.average != null && (
+            <span> · 平均评分 <span className="text-warning">★ {ratings.average.toFixed(1)}</span>（{ratings.count} 篇）</span>
+          )}
         </div>
       )}
 

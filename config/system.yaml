@@ -15,6 +15,7 @@ ai:
   model: "deepseek-v4.1-flash"              # any OpenAI-compatible model id
   base_url: "https://opencode.ai/zen/go/v1"
   api_key_env: "LLM_API_KEY"                # env var holding the API key
+  embedding_model: ""                       # e.g. text-embedding-3-small; empty = keyword-only QA
   timeout: 1800                             # per-request wall clock ceiling (s)
   request_timeout: 600                      # single HTTP attempt (s)
   max_tokens: 32768
@@ -83,6 +84,9 @@ notifications:
   enabled: false
   notify_on: ["failed", "cancelled", "round_finished"]
   timeout: 10                  # per-channel HTTP timeout (s)
+  digest:                      # 轮次完成时推送内容摘要（Top 行动等）
+    enabled: true
+    max_actions: 5
   webhook_url: ""              # Slack/Discord compatible JSON POST (or env)
   webhook_url_env: "NOTIFY_WEBHOOK_URL"
   wecom:                       # 企业微信群机器人

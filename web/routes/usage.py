@@ -13,6 +13,13 @@ from web.settings import get_settings
 router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 
+@router.get("/ratings")
+def get_ratings(user=Depends(require_viewer)):
+    from web.indexer import db as index_db
+
+    return index_db.rating_summary()
+
+
 @router.get("")
 def get_usage(
     days: int = Query(30, ge=0, le=3650),

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getRounds, getReportRaw, runRound, cancelRound, retryRound, type Round } from "@/api";
+import { RoundDetail } from "@/components/RoundDetail";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatTokens } from "@/lib/utils";
 import { RefreshCw, Play, Square } from "lucide-react";
@@ -34,6 +35,7 @@ export function RoundsPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [compareDate, setCompareDate] = useState<string | null>(null);
+  const [detailDate, setDetailDate] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
 
   const load = useCallback(async () => {
@@ -215,6 +217,12 @@ export function RoundsPage() {
                       {a.name.replace(/\.json$/, "")}
                     </button>
                   ))}
+                  <button
+                    onClick={() => setDetailDate(round.date)}
+                    className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline"
+                  >
+                    详情
+                  </button>
                   {roundIndex < rounds.length - 1 && (
                     <button
                       onClick={() => setCompareDate(compareDate === round.date ? null : round.date)}
@@ -308,6 +316,10 @@ export function RoundsPage() {
             );
           })}
         </div>
+      )}
+
+      {detailDate && (
+        <RoundDetail date={detailDate} onClose={() => setDetailDate(null)} />
       )}
     </div>
   );

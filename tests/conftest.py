@@ -78,6 +78,11 @@ def web_env(tmp_path, monkeypatch, _password_hashes):
     monkeypatch.setattr(user_db, "_DB_PATH_OVERRIDE", str(db_file))
     user_db.init_db()
 
+    from web.indexer import db as index_db
+    monkeypatch.setattr(index_db, "_DB_PATH_OVERRIDE",
+                        str(tmp_path / "state" / "reports.db"))
+    index_db.init_db()
+
     users: dict[str, dict] = {}
     for username, role, password in (
         ("admin", "admin", "admin-pass-123"),

@@ -167,6 +167,10 @@ python run_web.py reindex                  # Force re-scan output/ for search in
 |---------|-------------|
 | Dashboard | Job statistics, recent runs, token usage & estimated cost, 月度预算进度 |
 | Rounds board | 情报轮次看板：10 阶段状态、一键运行、失败阶段补跑、历史轮次；每轮自动生成并在卡片上直接下载 `action_items.json` / `watchlist.json` / `sources.json` 结构化产物（失败可手动补跑导出脚本） |
+| 行动跟踪 | 轮次详情抽屉：行动/测试/观察项勾选完成、放弃、备注；跨轮延续视图（往轮未完成）；内容级 diff（新增/移除行动、观察与来源、新域名） |
+| 报告消费 | 星标、标签、已读筛选；分享链接（签名 token，未登录只读）；HTML 导出（可打印 PDF）；邮件发送报告 |
+| 报告评分 | 1-5 星评分 + 备注，Dashboard 展示平均分，`/api/usage/ratings` 按 job 聚合 |
+| 订阅源 | Job `sources:` 支持 `rss:` / `github:` / `arxiv:` / `hn:`，预抓取注入 prompt（GITHUB_TOKEN 可选提额） |
 | Account | 修改密码、会话管理、API Token（脚本/CI 用 Bearer 调用，免 CSRF）；管理员可改角色/禁用/重置密码/强制下线 |
 | Notifications | 通知（失败/取消/完成/轮次完成）：Webhook（Slack/Discord 兼容）、企业微信、飞书、**个人微信（PushPlus / Server酱）**、邮件；`python run.py --test-notify` 一键验证 |
 | Job management | Browse jobs, view/edit YAML config (Monaco editor), trigger/cancel runs |
@@ -174,6 +178,7 @@ python run_web.py reindex                  # Force re-scan output/ for search in
 | Report viewer | Markdown rendering (GFM tables, code blocks, TOC sidebar), 报告元数据（模型/tokens/耗时）|
 | Live generation | 流式生成进度（thinking/writing 字数、耗时），工具轮带心跳 |
 | Full-text search | FTS5-powered search across report titles and content |
+| 问答（RAG） | 跨全部报告提问：FTS5 + 向量混合检索（配置 `ai.embedding_model` 后启用），回答带引用可跳转；「重建索引」按钮增量嵌入 |
 | User management | Admin-panel: create/delete users with role-based access |
 | Audit log | Track all mutations (run, cancel, YAML edit, config change) |
 | System config | Edit system.yaml from the browser (admin only) |

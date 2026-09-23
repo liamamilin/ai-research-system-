@@ -147,6 +147,122 @@ def extract_sources(text: str) -> list[str]:
     return list(seen)
 
 
+def _diff_key(text: str) -> str:
+    text = re.sub(r"^\s*\d+\s*[.、)]\s*", "", text or "")
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def load_round_payloads(round_dir: str) -> Optional[dict]:
+    """Load a round's action/watchlist/source payloads, from JSON or docs."""
+    if not os.path.isdir(round_dir):
+        return None
+
+    documents = sorted(
+        fn for fn in os.listdir(round_dir)
+        if fn.endswith(".md") and os.path.isfile(os.path.join(round_dir, fn))
+    )
+    actions_path = os.path.join(round_dir, ACTION_FILE)
+    watchlist_path = os.path.join(round_dir, WATCHLIST_FILE)
+    sources_path = os.path.join(round_dir, SOURCES_FILE)
+
+    def _read_json(path: str) -> Optional[dict]:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return None
+
+    p9_text = ""
+    p9_name = next((fn for fn in documents if fn.startswith("09_")), None)
+    if p9_name:
+        with open(os.path.join(round_dir, p9_name), encoding="utf-8") as f:
+            p9_text = f.read()
+
+    actions = _read_json(actions_path)
+    if actions is None:
+        parsed = parse_action_items(p9_text) if p9_text else {"actions": [], "tests": []}
+        actions = {"actions": parsed["actions"], "tests": parsed["tests"]}
+    watchlist = _read_json(watchlist_path)
+    if watchlist is None:
+        watchlist = {"items": parse_watchlist(p9_text) if p9_text else []}
+    sources = _read_json(sources_path)
+    if sources is None:
+        urls: list[str] = []
+        for fn in documents:
+            with open(os.path.join(round_dir, fn), encoding="utf-8") as f:
+                for url in extract_sources(f.read()):
+                    if url not in urls:
+                        urls.append(url)
+        sources = {"sources": [{"url": u} for u in urls], "documents": documents}
+    return {"actions": actions, "watchlist": watchlist, "sources": sources}
+
+
+def _diff_rows(old_rows: list, new_rows: list, key: str) -> dict:
+    old_map = {_diff_key(r.get(key, "")): r for r in old_rows if r.get(key)}
+    new_map = {_diff_key(r.get(key, "")): r for r in new_rows if r.get(key)}
+    added = [new_map[k] for k in new_map if k not in old_map]
+    removed = [old_map[k] for k in old_map if k not in new_map]
+    persisted = [new_map[k] for k in new_map if k in old_map]
+    return {"added": added, "removed": removed, "persisted": persisted}
+
+
+def _domain(url: str) -> str:
+    return re.sub(r"^https?://(www\.)?", "", url or "").split("/", 1)[0]
+
+
+def diff_rounds(round_a_dir: str, round_b_dir: str,
+                date_a: Optional[str] = None,
+                date_b: Optional[str] = None) -> Optional[dict]:
+    """Structured content diff between two rounds.
+
+    ``round_b`` is the newer round. Returns ``None`` when either directory
+    is missing.
+    """
+    payload_a = load_round_payloads(round_a_dir)
+    payload_b = load_round_payloads(round_b_dir)
+    if payload_a is None or payload_b is None:
+        return None
+
+    date_a = date_a or os.path.basename(round_a_dir.rstrip(os.sep))
+    date_b = date_b or os.path.basename(round_b_dir.rstrip(os.sep))
+
+    actions = _diff_rows(payload_a["actions"].get("actions") or [],
+                         payload_b["actions"].get("actions") or [], "action")
+    tests = _diff_rows(payload_a["actions"].get("tests") or [],
+                       payload_b["actions"].get("tests") or [], "test")
+    watchlist = _diff_rows(payload_a["watchlist"].get("items") or [],
+                           payload_b["watchlist"].get("items") or [], "topic")
+
+    old_urls = {s.get("url") for s in payload_a["sources"].get("sources") or [] if s.get("url")}
+    new_urls = {s.get("url") for s in payload_b["sources"].get("sources") or [] if s.get("url")}
+    added_urls = sorted(new_urls - old_urls)
+    removed_urls = sorted(old_urls - new_urls)
+    old_domains = {_domain(u) for u in old_urls}
+    new_domains = sorted({_domain(u) for u in added_urls} - old_domains)
+
+    return {
+        "from": date_a,
+        "to": date_b,
+        "actions": actions,
+        "tests": tests,
+        "watchlist": watchlist,
+        "sources": {
+            "added": added_urls,
+            "removed": removed_urls,
+            "new_domains": new_domains,
+        },
+        "counts": {
+            "actions_added": len(actions["added"]),
+            "actions_removed": len(actions["removed"]),
+            "tests_added": len(tests["added"]),
+            "watchlist_added": len(watchlist["added"]),
+            "watchlist_removed": len(watchlist["removed"]),
+            "sources_added": len(added_urls),
+            "sources_removed": len(removed_urls),
+        },
+    }
+
+
 def _write_json(path: str, payload: dict) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

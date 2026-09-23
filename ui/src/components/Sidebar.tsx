@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { ListOrdered, FileText, LayoutDashboard, Settings, Clock, LogOut, Radar } from "lucide-react";
+import { ListOrdered, FileText, LayoutDashboard, Settings, Clock, LogOut, Radar, MessageSquareText } from "lucide-react";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 import { AccountModal } from "./AccountModal";
@@ -9,6 +9,7 @@ const navItems = [
   { to: "/", label: "总览", icon: LayoutDashboard },
   { to: "/jobs", label: "Jobs", icon: ListOrdered },
   { to: "/rounds", label: "情报轮次", icon: Radar },
+  { to: "/ask", label: "问答", icon: MessageSquareText },
   { to: "/reports", label: "报告", icon: FileText },
 ];
 

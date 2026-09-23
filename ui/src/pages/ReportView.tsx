@@ -1,9 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams, Link } from "react-router-dom";
-import { getReportRaw } from "@/api";
+import { getReportRaw, updateReportMeta, createShareLink, emailReport } from "@/api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, Download, Copy, List } from "lucide-react";
+import { ArrowLeft, Download, Copy, List, Star, Tag, Share2, Mail, FileCode } from "lucide-react";
 import { cn, formatTokens } from "@/lib/utils";
 
 interface Heading {
@@ -68,6 +68,9 @@ export function ReportViewPage() {
   const [copied, setCopied] = useState(false);
   const [tocOpen, setTocOpen] = useState(true);
   const [activeId, setActiveId] = useState("");
+  const [indexMeta, setIndexMeta] = useState<any>(null);
+  const [notice, setNotice] = useState("");
+  const [busyAction, setBusyAction] = useState("");
 
   const fetchContent = useCallback(async () => {
     if (!path) {
@@ -81,12 +84,71 @@ export function ReportViewPage() {
       const data = await getReportRaw(path);
       setContent(data.content);
       setMeta((data as any).meta || null);
+      setIndexMeta((data as any).index || null);
+      updateReportMeta(path, { read: true })
+        .then((row) => setIndexMeta(row))
+        .catch(() => {});
     } catch (err: any) {
       setError(err.message || "加载失败");
     } finally {
       setLoading(false);
     }
   }, [path]);
+
+  const runAction = async (key: string, fn: () => Promise<void>) => {
+    setBusyAction(key);
+    setNotice("");
+    try {
+      await fn();
+    } catch (err: unknown) {
+      setNotice(err instanceof Error ? err.message : "操作失败");
+    } finally {
+      setBusyAction("");
+    }
+  };
+
+  const handleToggleFavorite = () => runAction("fav", async () => {
+    const next = !indexMeta?.favorite;
+    const row = await updateReportMeta(path, { favorite: next });
+    setIndexMeta(row);
+    setNotice(next ? "已加星标" : "已取消星标");
+  });
+
+  const handleEditTags = () => runAction("tags", async () => {
+    const current = (indexMeta?.tags || []).join(", ");
+    const raw = window.prompt("标签（逗号分隔）：", current);
+    if (raw === null) return;
+    const tags = raw.split(",").map((t) => t.trim()).filter(Boolean);
+    const row = await updateReportMeta(path, { tags });
+    setIndexMeta(row);
+    setNotice("标签已更新");
+  });
+
+  const handleShare = () => runAction("share", async () => {
+    const link = await createShareLink(path);
+    const full = window.location.origin + link.url;
+    await navigator.clipboard.writeText(full).catch(() => {});
+    setNotice("分享链接已复制（7 天有效，未登录可只读访问）");
+  });
+
+  const handleSetRating = (value: number) => runAction("rating", async () => {
+    const next = indexMeta?.rating === value ? 0 : value;
+    const row = await updateReportMeta(path, { rating: next });
+    setIndexMeta(row);
+    setNotice(next ? `已评分 ${next}/5` : "已清除评分");
+  });
+
+  const handleExportHtml = () => {
+    window.open(`/api/reports/html?path=${encodeURIComponent(path)}&download=true`, "_blank");
+  };
+
+  const handleEmail = () => runAction("email", async () => {
+    const raw = window.prompt("收件人（逗号分隔，留空使用默认）：", "");
+    if (raw === null) return;
+    const to = raw.split(",").map((t) => t.trim()).filter(Boolean);
+    await emailReport(path, to.length ? to : undefined);
+    setNotice("邮件已发送");
+  });
 
   useEffect(() => {
     fetchContent();
@@ -147,15 +209,58 @@ export function ReportViewPage() {
             目录
           </button>
         )}
+        <span className="flex items-center gap-0.5" title="报告评分（点击设置，再点取消）">
+          {[1, 2, 3, 4, 5].map((value) => (
+            <button
+              key={value}
+              onClick={() => handleSetRating(value)}
+              disabled={!!busyAction}
+              className="p-0.5 rounded hover:bg-bg-hover transition"
+              title={`${value} 分`}
+            >
+              <Star className={cn("w-3.5 h-3.5",
+                (indexMeta?.rating || 0) >= value
+                  ? "fill-current text-warning"
+                  : "text-text-muted")} />
+            </button>
+          ))}
+        </span>
+        <button onClick={handleToggleFavorite} disabled={!!busyAction}
+                className="btn text-xs" title="星标">
+          <Star className={cn("w-3 h-3", indexMeta?.favorite && "fill-current text-warning")} />
+          星标
+        </button>
+        <button onClick={handleEditTags} disabled={!!busyAction} className="btn text-xs" title="编辑标签">
+          <Tag className="w-3 h-3" />
+          标签
+        </button>
+        <button onClick={handleShare} disabled={!!busyAction} className="btn text-xs" title="生成分享链接">
+          <Share2 className="w-3 h-3" />
+          {busyAction === "share" ? "生成中..." : "分享"}
+        </button>
+        <button onClick={handleExportHtml} className="btn text-xs" title="导出 HTML">
+          <FileCode className="w-3 h-3" />
+          HTML
+        </button>
+        <button onClick={handleEmail} disabled={!!busyAction} className="btn text-xs" title="邮件发送">
+          <Mail className="w-3 h-3" />
+          {busyAction === "email" ? "发送中..." : "邮件"}
+        </button>
         <button onClick={handleCopy} className="btn text-xs" title="复制原文">
           <Copy className="w-3 h-3" />
           {copied ? "已复制" : "复制"}
         </button>
-        <button onClick={handleDownload} className="btn text-xs" title="下载">
+        <button onClick={handleDownload} className="btn text-xs" title="下载 Markdown">
           <Download className="w-3 h-3" />
           下载
         </button>
       </div>
+
+      {notice && (
+        <div className="text-xs text-text-muted bg-bg-card border border-border rounded-md px-3 py-1.5">
+          {notice}
+        </div>
+      )}
 
       {/* Breadcrumb path + metadata */}
       <div className="text-xs text-text-muted flex flex-wrap items-center gap-2">

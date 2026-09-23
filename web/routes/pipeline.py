@@ -88,6 +88,57 @@ def get_round(date: str, user=Depends(require_viewer)):
     return _round_payload(date)
 
 
+@router.get("/rounds/{date}/diff")
+def get_round_diff(date: str, against: str | None = Query(None),
+                   user=Depends(require_viewer)):
+    """Content diff between a round and the previous one (or ``against``)."""
+    if len(date) != 10:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ApiError.make("invalid_date", "日期格式应为 YYYY-MM-DD"),
+        )
+    settings = get_settings()
+    base = os.path.join(settings.paths.output_dir, pipeline.PIPELINE_DIR)
+    round_b = os.path.join(base, date)
+    if not os.path.isdir(round_b):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ApiError.make("round_not_found", "轮次不存在"),
+        )
+
+    if against:
+        if len(against) != 10:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=ApiError.make("invalid_date", "against 格式应为 YYYY-MM-DD"),
+            )
+        previous = against
+    else:
+        candidates = sorted(
+            d for d in os.listdir(base)
+            if len(d) == 10 and os.path.isdir(os.path.join(base, d)) and d < date
+        )
+        previous = candidates[-1] if candidates else None
+
+    if not previous:
+        return {"from": None, "to": date, "actions": {"added": [], "removed": [], "persisted": []},
+                "tests": {"added": [], "removed": [], "persisted": []},
+                "watchlist": {"added": [], "removed": [], "persisted": []},
+                "sources": {"added": [], "removed": [], "new_domains": []},
+                "counts": {"actions_added": 0, "actions_removed": 0, "tests_added": 0,
+                           "watchlist_added": 0, "watchlist_removed": 0,
+                           "sources_added": 0, "sources_removed": 0}}
+
+    diff = artifacts.diff_rounds(os.path.join(base, previous), round_b,
+                                 date_a=previous, date_b=date)
+    if diff is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ApiError.make("round_not_found", "对比轮次不存在"),
+        )
+    return diff
+
+
 @router.post("/run")
 def run_round(request: Request, payload: dict | None = None,
               user=Depends(require_editor)):
