@@ -22,6 +22,8 @@ prompt: |
   基于以下关键词相关的最新信息，产出可直接进入执行的行动方案：
   {keywords}
 
+  {recent_outcomes}
+
   信息基准时间：{date}；近期变化以 {date_7d_ago} 至 {date} 为主。
   输出语言：{language}（技术名称保留英文原名）。
 

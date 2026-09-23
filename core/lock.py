@@ -17,6 +17,8 @@ import logging
 import threading
 from typing import Optional
 
+from core.fileio import atomic_write, file_lock
+
 logger = logging.getLogger(__name__)
 
 _LOCK_DIR = "state/locks"
@@ -51,7 +53,9 @@ class LockManager:
         self.job_name = job_name
         self.lock_path = _job_lock_path(job_name)
         self.stale_after = stale_after
-        self._owner_id = owner_id or str(os.getpid())
+        # Thread id in the default owner key: two threads in one process are
+        # two owners, so a second run of the same job cannot "re-enter" the lock.
+        self._owner_id = owner_id or f"{os.getpid()}:{threading.get_ident()}"
         self._released = False
 
     # ------------------------------------------------------------------
@@ -97,7 +101,8 @@ class LockManager:
                 )
                 return False
 
-        self._write_lock()
+        with file_lock(self.lock_path):
+            self._write_lock()
         logger.debug("Lock acquired for '%s' at %s", self.job_name, self.lock_path)
         return True
 
@@ -175,8 +180,7 @@ class LockManager:
             "thread": threading.current_thread().name,
             "owner_id": self._owner_id,
         }
-        with open(self.lock_path, "w") as f:
-            json.dump(payload, f)
+        atomic_write(self.lock_path, json.dumps(payload))
 
     def _force_release(self):
         try:

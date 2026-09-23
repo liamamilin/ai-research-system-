@@ -42,7 +42,9 @@ def test_finish_round_exports_and_syncs(tmp_path, monkeypatch):
                            config_dir=str(tmp_path / "config"),
                            notify=False)
     assert summary["artifacts"] is True
-    assert summary["tracking"] == {"new": 2, "updated": 0}
+    assert summary["tracking"]["new"] == 2
+    assert summary["tracking"]["updated"] == 0
+    assert summary["warnings"] == []
 
     round_dir = tmp_path / "output" / "practical_ai_intelligence" / "2026-01-02"
     assert (round_dir / "action_items.json").is_file()

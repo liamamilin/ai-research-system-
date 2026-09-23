@@ -27,7 +27,8 @@ def finish_round(date: str, output_dir: str = "output", state_dir: str = "state"
 
     round_dir = os.path.join(output_dir, PIPELINE_DIR, date)
     summary: dict = {"date": date, "round_dir": round_dir,
-                     "artifacts": False, "tracking": None, "notified": False}
+                     "artifacts": False, "tracking": None, "notified": False,
+                     "warnings": []}
 
     written = export_round_artifacts(round_dir, date=date)
     if written:
@@ -43,6 +44,12 @@ def finish_round(date: str, output_dir: str = "output", state_dir: str = "state"
             summary["tracking"] = counts
         except Exception as exc:  # noqa: BLE001 - tracking is best-effort
             logger.warning("Round tracking sync failed: %s", exc)
+    else:
+        logger.warning("Round %s has no documents; artifacts not exported", date)
+
+    for filename, payload in (written or {}).items():
+        for warning in (payload or {}).get("warnings", []):
+            summary.setdefault("warnings", []).append(f"{filename}: {warning}")
 
     if notify:
         try:

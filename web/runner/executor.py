@@ -95,6 +95,7 @@ def start_job(job_name: str, started_by: str,
     engine_stub = ResearchEngine(config_dir=config_dir, jobs_dir=jobs_dir)
     task = registry.start(job_name, started_by, engine_stub)
 
+    _attach_persistence(task, config_dir)
     task.log_bus.write({
         "type": "log",
         "level": "info",
@@ -105,3 +106,26 @@ def start_job(job_name: str, started_by: str,
     task.future = future
 
     return task
+
+
+def _attach_persistence(task: RunningTask, config_dir: str) -> None:
+    """Mirror this run's events to logs/jobs/<job>.jsonl for later replay."""
+    try:
+        from web.runner.log_store import append_event
+        from web.settings import get_settings
+
+        logs_dir = get_settings().paths.logs_dir
+    except Exception:  # noqa: BLE001 - persistence is best-effort
+        logger.debug("Log persistence disabled for %s", task.job_name)
+        return
+
+    original_write = task.log_bus.write
+
+    def write_with_persistence(event: dict) -> None:
+        try:
+            append_event(logs_dir, task.job_name, task.task_id, event)
+        except Exception:  # noqa: BLE001 - never break a run on logging
+            pass
+        original_write(event)
+
+    task.log_bus.write = write_with_persistence

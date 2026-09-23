@@ -7,6 +7,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 import { ArrowLeft, Play, Square } from "lucide-react";
 import { useLogStream, type LogEvent } from "@/hooks/useLogStream";
+import { getJobLogs, type PersistedLogRecord, type PersistedRun } from "@/api";
 
 const YamlEditor = lazy(() => import("@/components/YamlEditor").then(m => ({ default: m.YamlEditor })));
 
@@ -28,6 +29,11 @@ export function JobDetailPage() {
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState("");
   const [showLogs, setShowLogs] = useState(false);
+
+  // Persisted run logs (survive refresh / server restart)
+  const [pastLogs, setPastLogs] = useState<PersistedLogRecord[]>([]);
+  const [pastRuns, setPastRuns] = useState<PersistedRun[]>([]);
+  const [pastLoading, setPastLoading] = useState(false);
 
   // YAML editing state
   const [editYaml, setEditYaml] = useState("");
@@ -70,6 +76,21 @@ export function JobDetailPage() {
     fetchJob();
   }, [fetchJob]);
 
+  const loadPastLogs = useCallback(async () => {
+    if (!name) return;
+    setPastLoading(true);
+    try {
+      const data = await getJobLogs(decodeURIComponent(name), { limit: 2000 });
+      setPastRuns(Array.isArray(data.runs) ? data.runs : []);
+      setPastLogs(Array.isArray(data.events) ? data.events : []);
+    } catch {
+      setPastRuns([]);
+      setPastLogs([]);
+    } finally {
+      setPastLoading(false);
+    }
+  }, [name]);
+
   const decodedNameForHistory = name ? decodeURIComponent(name) : "";
   useEffect(() => {
     if (tab !== "history" || !decodedNameForHistory) return;
@@ -106,6 +127,10 @@ export function JobDetailPage() {
     clearLogs();
     try {
       await runJob(decodeURIComponent(name));
+      // Re-subscribe now that the task exists server-side; the first
+      // subscription may have terminated as "idle" before the run started.
+      reconnectLogs();
+      fetchJob();
     } catch (err: unknown) {
       if (err instanceof ApiError && err.code === "already_running") {
         setRunError("Job 正在运行中");
@@ -161,6 +186,16 @@ export function JobDetailPage() {
     setLastSaveResult("");
   };
 
+  const isRunning = job?.is_running || sseRunning;
+
+  // Load persisted logs when the logs tab opens and no run is live
+  useEffect(() => {
+    if (tab !== "logs" || !name) return;
+    if (isRunning && logEvents.length > 0) return;
+    loadPastLogs();
+  }, [tab, name, isRunning, logEvents.length, loadPastLogs]);
+
+
   if (loading) {
     return <div className="text-text-muted">加载中...</div>;
   }
@@ -190,8 +225,6 @@ export function JobDetailPage() {
     cancelled: "text-warning",
     skipped: "text-warning",
   };
-
-  const isRunning = job.is_running || sseRunning;
 
   return (
     <div className="space-y-4">
@@ -440,12 +473,77 @@ export function JobDetailPage() {
 
       {/* === Logs tab === */}
       {tab === "logs" && (
-        <LogViewer
-          events={logEvents}
-          streamStatus={streamStatus}
-          autoScroll={true}
-          onRetry={reconnectLogs}
-        />
+        <div className="space-y-3">
+          {logEvents.length > 0 ? (
+            <LogViewer
+              events={logEvents}
+              streamStatus={streamStatus}
+              autoScroll={true}
+              onRetry={reconnectLogs}
+              jobRunning={isRunning}
+            />
+          ) : (
+            <LogViewer
+              events={[]}
+              streamStatus={streamStatus}
+              autoScroll={true}
+              onRetry={reconnectLogs}
+              jobRunning={isRunning}
+            />
+          )}
+
+          {!isRunning && (pastRuns.length > 0 || pastLogs.length > 0) && (
+            <div className="card">
+              <div className="px-4 py-2 border-b border-border flex items-center gap-2 text-xs text-text-muted">
+                <span>上次运行日志</span>
+                {pastRuns[0] && (
+                  <>
+                    <span className={cn("badge border", statusBadgeClass(pastRuns[0].status))}>
+                      {pastRuns[0].status}
+                    </span>
+                    <span>{pastRuns[0].started_at}</span>
+                    <span>· {pastRuns[0].events} 条事件</span>
+                  </>
+                )}
+                <button
+                  onClick={loadPastLogs}
+                  disabled={pastLoading}
+                  className="ml-auto text-text-muted hover:text-foreground"
+                >
+                  {pastLoading ? "加载中..." : "刷新"}
+                </button>
+              </div>
+              <div className="px-3 py-2 font-mono text-[11px] leading-relaxed max-h-[420px] overflow-auto">
+                {pastLogs.map((record, i) => (
+                  <div key={`${record.run_id}-${i}`} className="flex gap-2 py-0.5">
+                    <span className="text-text-muted/60 shrink-0">
+                      {(record.ts || "").slice(11, 19)}
+                    </span>
+                    <span className={cn(
+                      "shrink-0 w-12",
+                      record.event?.type === "error" ? "text-danger"
+                        : record.event?.type === "status" ? "text-accent"
+                          : "text-text-muted"
+                    )}>
+                      {record.event?.type || "log"}
+                    </span>
+                    <span className="whitespace-pre-wrap break-all">
+                      {record.event?.message
+                        || record.event?.status
+                        || record.event?.phase
+                        || JSON.stringify(record.event)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {pastRuns.length > 1 && (
+                <div className="px-4 py-2 border-t border-border text-[11px] text-text-muted">
+                  另有 {pastRuns.length - 1} 次历史运行记录（日志已按大小轮转，仅保留最近部分）
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -453,16 +551,32 @@ export function JobDetailPage() {
 
 // --- LogViewer sub-component ---
 
+function statusBadgeClass(status: string): string {
+  switch (status) {
+    case "success":
+      return "bg-green-900/40 text-green-400 border-green-800";
+    case "failed":
+      return "bg-red-900/40 text-red-400 border-red-800";
+    case "cancelled":
+    case "skipped":
+      return "bg-yellow-900/40 text-yellow-400 border-yellow-800";
+    default:
+      return "bg-bg-hover text-text-muted border-border";
+  }
+}
+
 function LogViewer({
   events,
   streamStatus,
   autoScroll,
   onRetry,
+  jobRunning = false,
 }: {
   events: LogEvent[];
   streamStatus: string;
   autoScroll: boolean;
   onRetry?: () => void;
+  jobRunning?: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -487,16 +601,32 @@ function LogViewer({
 
   if (events.length === 0 && streamStatus === "connecting") {
     return (
-      <div className="card p-6 text-center text-text-muted text-sm">
-        <div className="animate-pulse">等待日志...</div>
+      <div className="card p-6 text-center text-text-muted text-sm space-y-2">
+        {jobRunning ? (
+          <>
+            <div className="animate-pulse">等待日志...</div>
+            <button onClick={onRetry} className="btn text-xs">
+              重新连接日志流
+            </button>
+          </>
+        ) : (
+          <div>当前没有正在运行的实例。点击「运行」后日志会实时显示在这里。</div>
+        )}
       </div>
     );
   }
 
   if (events.length === 0) {
     return (
-      <div className="card p-6 text-center text-text-muted text-sm">
-        暂无日志。点击"运行"按钮启动 Job。
+      <div className="card p-6 text-center text-text-muted text-sm space-y-2">
+        <div>
+          {streamStatus === "finished"
+            ? "本次运行没有产生日志（服务重启后历史日志不保留）。"
+            : "暂无日志。点击「运行」按钮启动 Job。"}
+        </div>
+        <button onClick={onRetry} className="btn text-xs">
+          重新连接
+        </button>
       </div>
     );
   }

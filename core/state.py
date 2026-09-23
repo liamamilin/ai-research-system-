@@ -15,6 +15,8 @@ import time
 import logging
 from typing import Optional
 
+from core.fileio import append_line, atomic_write, file_lock
+
 logger = logging.getLogger(__name__)
 
 _STATE_DIR = "state"
@@ -75,10 +77,10 @@ class StateManager:
         }
 
         try:
-            with open(path, "w") as f:
-                json.dump(entry, f, indent=2, ensure_ascii=False)
+            with file_lock(path):
+                atomic_write(path, json.dumps(entry, indent=2, ensure_ascii=False))
             logger.debug("State updated for '%s': %s", job_name, status)
-        except OSError as e:
+        except (OSError, TimeoutError) as e:
             logger.error("Failed to write state for '%s': %s", job_name, e)
 
         # Also append to history
@@ -122,9 +124,8 @@ class StateManager:
             "usage": usage,
         }
         try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except OSError as e:
+            append_line(path, json.dumps(entry, ensure_ascii=False) + "\n")
+        except (OSError, TimeoutError) as e:
             logger.error("Failed to write history for '%s': %s", job_name, e)
 
     @staticmethod

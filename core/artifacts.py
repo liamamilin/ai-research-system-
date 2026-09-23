@@ -22,52 +22,128 @@ ACTION_FILE = "action_items.json"
 WATCHLIST_FILE = "watchlist.json"
 SOURCES_FILE = "sources.json"
 
+SCHEMA_VERSION = 2
+
 SYNTHESIS_KEY = "09_executive_synthesis_and_actions"
 
 _URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'，。；：、）】》]+")
 _TRAILING = ".,;:!?、，。；：）】》"
 
-_ACTION_HEADERS = {
-    "行动": "action",
-    "action": "action",
-    "为何现在": "why_now",
-    "why now": "why_now",
-    "关联雷达": "related_radars",
-    "related radar": "related_radars",
-    "related radars": "related_radars",
-    "预期收益": "expected_benefit",
-    "expected benefit": "expected_benefit",
-    "工作量": "effort",
-    "effort": "effort",
-    "优先级": "priority",
-    "priority": "priority",
+# Canonical field aliases. Header wording drifts between rounds and models,
+# so every known spelling maps to one canonical name; anything unseen falls
+# back to keyword matching and is reported as a warning instead of dropped.
+_FIELD_ALIASES: dict[str, list[str]] = {
+    "action": [
+        "行动", "立即行动", "行动项", "具体行动", "待办", "任务", "下一步",
+        "action", "actionitem", "actionitems", "immediateaction", "todo", "nextaction",
+    ],
+    "why_now": [
+        "为何现在", "为什么是现在", "为什么现在", "为何是现在", "现在的原因", "时机",
+        "whynow", "whyitnow", "rationale", "timing",
+    ],
+    "related_radars": [
+        "关联雷达", "相关雷达", "来源雷达", "关联报告",
+        "relatedradar", "relatedradars", "relatedreports",
+    ],
+    "expected_benefit": [
+        "预期收益", "收益", "价值", "好处", "expectedbenefit", "benefit", "value",
+    ],
+    "effort": [
+        "工作量", "投入", "成本", "effort", "workload", "cost",
+    ],
+    "priority": [
+        "优先级", "优先", "priority", "prio",
+    ],
+    "owner_role": [
+        "负责人", "所需角色", "角色", "承担者", "owner", "role", "responsible", "assignee",
+    ],
+    "deadline": [
+        "时限", "截止", "截止时间", "期限", "完成时间",
+        "deadline", "duedate", "due", "when", "timeline",
+    ],
+    "acceptance": [
+        "验收标准", "验收", "完成标准", "acceptance", "acceptancecriteria", "definitionofdone",
+    ],
+    "test": [
+        "测试", "试验", "验证", "test", "tests", "experiment", "trial",
+    ],
+    "method": [
+        "方法", "步骤", "做法", "method", "approach", "steps", "how",
+    ],
+    "success_criteria": [
+        "成功标准", "判定标准", "通过标准", "successcriteria", "passcriteria", "criteria",
+    ],
+    "risk": [
+        "风险", "risk", "risks",
+    ],
+    "topic": [
+        "议题", "观察项", "主题", "关注点", "观察议题",
+        "topic", "topics", "watchitem", "subject", "item",
+    ],
+    "watch_point": [
+        "观察点", "观察要点", "watchpoint", "watchitemdetail",
+    ],
+    "watch_rationale": [
+        "为什么观察", "为何观察", "观察理由", "理由", "原因",
+        "whys", "reason", "why",
+    ],
+    "trigger": [
+        "触发信号", "触发条件", "触发条件复审时点", "触发条件/复审时点", "触发", "复审时点", "阈值",
+        "trigger", "triggers", "signal", "signals", "watchfor", "threshold",
+    ],
+    "evidence": [
+        "依据", "证据", "evidence", "basis",
+    ],
 }
 
-_TEST_HEADERS = {
-    "测试": "test",
-    "test": "test",
-    "方法": "method",
-    "method": "method",
-    "成功标准": "success_criteria",
-    "success criteria": "success_criteria",
-    "成本": "cost",
-    "cost": "cost",
-    "风险": "risk",
-    "risk": "risk",
-    "优先级": "priority",
-    "priority": "priority",
-}
+# Ordered keyword fallback for headers never seen before. First hit wins, so
+# more specific fragments must come first.
+_HEADER_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("trigger", ("触发", "复审", "阈值")),
+    ("why_now", ("现在", "时机", "为何", "为什么")),
+    ("acceptance", ("验收", "完成标准")),
+    ("owner_role", ("负责", "角色", "承担")),
+    ("deadline", ("截止", "时限", "期限", "何时")),
+    ("topic", ("观察", "议题", "主题", "关注")),
+    ("expected_benefit", ("收益", "价值", "好处")),
+    ("success_criteria", ("成功标准", "判定", "通过")),
+    ("risk", ("风险",)),
+    ("priority", ("优先",)),
+    ("effort", ("成本", "投入", "工作量")),
+    ("method", ("方法", "步骤", "做法")),
+    ("test", ("测试", "试验", "验证")),
+    ("action", ("行动", "待办", "任务")),
+]
 
-_WATCH_HEADERS = {
-    "议题": "topic",
-    "topic": "topic",
-    "观察点": "watch_point",
-    "watch point": "watch_point",
-    "触发信号": "trigger",
-    "trigger": "trigger",
-    "依据": "evidence",
-    "evidence": "evidence",
-}
+
+def _normalize_header(text: str) -> str:
+    """Normalize a Markdown table header for alias matching."""
+    clean = re.sub(r"[*_`~\s]", "", (text or "").strip().lower())
+    return re.sub(r"[/\\|:：\-]+", "", clean)
+
+
+def _build_header_lookup() -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for field, aliases in _FIELD_ALIASES.items():
+        for alias in aliases:
+            lookup.setdefault(_normalize_header(alias), field)
+    return lookup
+
+
+_HEADER_LOOKUP = _build_header_lookup()
+
+
+def _canonical_header(header: str) -> Optional[str]:
+    normalized = _normalize_header(header)
+    if not normalized:
+        return None
+    field = _HEADER_LOOKUP.get(normalized)
+    if field:
+        return field
+    for field, keywords in _HEADER_KEYWORDS:
+        if any(kw in normalized for kw in keywords):
+            return field
+    return None
 
 
 def _find_section(text: str, *keywords: str) -> str:
@@ -110,31 +186,115 @@ def _parse_table(section: str) -> list[dict]:
     return rows
 
 
-def _map_row(row: dict, mapping: dict) -> dict:
-    mapped = {}
+def _map_row(row: dict, warnings: list[str], context: str) -> dict:
+    """Map a raw table row onto canonical field names.
+
+    Unknown headers fall back to keyword matching; anything still unmapped is
+    kept under ``col_<n>`` and reported so contract drift is visible.
+    """
+    mapped: dict[str, str] = {}
     for i, (key, value) in enumerate(row.items()):
-        clean = key.strip().strip("*").strip().lower()
-        name = mapping.get(clean)
-        if not name:
-            name = clean.replace(" ", "_") or f"col_{i + 1}"
-        mapped[name] = value.strip()
+        clean = (key or "").strip()
+        if not clean:
+            continue
+        field = _canonical_header(clean)
+        if field:
+            mapped.setdefault(field, str(value or "").strip())
+        else:
+            label = _normalize_header(clean) or f"col_{i + 1}"
+            mapped.setdefault(f"col_{i + 1}", str(value or "").strip())
+            message = f"{context}: 未识别的表头 '{clean}'"
+            if message not in warnings:
+                warnings.append(message)
     return mapped
+
+
+def canonicalize_rows(rows: list, primary: str, warnings: list[str],
+                      context: str) -> list[dict]:
+    """Validate and normalize item rows, keeping only usable ones.
+
+    Rows without their primary text are dropped but always reported through
+    ``warnings`` — a silent empty result previously hid 15 lost watchlist items.
+    """
+    clean_rows: list[dict] = []
+    for raw in rows or []:
+        if not isinstance(raw, dict):
+            warnings.append(f"{context}: 忽略非对象条目 {type(raw).__name__}")
+            continue
+        row = {k: str(v).strip() for k, v in raw.items() if v is not None}
+        if not row.get(primary):
+            alias = _canonical_header(primary)
+            for key, value in row.items():
+                if alias and _canonical_header(key) == alias and value:
+                    row[primary] = value
+                    break
+        if not row.get(primary):
+            fallback = next(
+                (v for k, v in row.items()
+                 if v and not k.startswith("col_") and _canonical_header(k) in
+                 ("topic", "watch_point", "action", "test", "text")),
+                "",
+            ) or next((v for v in row.values() if v), "")
+            if fallback:
+                row[primary] = fallback
+                warnings.append(
+                    f"{context}: 缺少 '{primary}' 列，已用首列文本兜底: {fallback[:40]}"
+                )
+            else:
+                warnings.append(f"{context}: 丢弃缺少 '{primary}' 的空条目")
+                continue
+        clean_rows.append(row)
+    return clean_rows
 
 
 def parse_action_items(p9_text: str) -> dict:
     """Extract immediate actions and this-week tests from a P9 report."""
+    warnings: list[str] = []
     actions_section = _find_section(p9_text, "立即行动", "Immediate Actions")
     tests_section = _find_section(p9_text, "本周测试", "Test This Week")
-    return {
-        "actions": [_map_row(r, _ACTION_HEADERS) for r in _parse_table(actions_section)],
-        "tests": [_map_row(r, _TEST_HEADERS) for r in _parse_table(tests_section)],
-    }
+    actions = canonicalize_rows(
+        [_map_row(r, warnings, "actions") for r in _parse_table(actions_section)],
+        "action", warnings, "actions")
+    tests = canonicalize_rows(
+        [_map_row(r, warnings, "tests") for r in _parse_table(tests_section)],
+        "test", warnings, "tests")
+    if p9_text and not actions and not tests:
+        warnings.append("actions: P9 文档中未解析出任何行动或测试（检查章节标题与表格结构）")
+    return {"actions": actions, "tests": tests, "warnings": warnings}
 
 
-def parse_watchlist(p9_text: str) -> list[dict]:
+def parse_watchlist(p9_text: str) -> dict:
     """Extract watchlist rows from a P9 report."""
+    warnings: list[str] = []
     section = _find_section(p9_text, "观察清单", "Watchlist")
-    return [_map_row(r, _WATCH_HEADERS) for r in _parse_table(section)]
+    items = canonicalize_rows(
+        [_map_row(r, warnings, "watchlist") for r in _parse_table(section)],
+        "topic", warnings, "watchlist")
+    if p9_text and not items:
+        warnings.append("watchlist: P9 文档中未解析出任何观察项（检查章节标题与表格结构）")
+    return {"items": items, "warnings": warnings}
+
+
+def normalize_payload_actions(payload: Optional[dict]) -> tuple[list[dict], list[dict], list[str]]:
+    """Canonicalize an actions payload loaded from JSON or parsed from P9."""
+    payload = payload or {}
+    warnings = [str(w) for w in (payload.get("warnings") or [])]
+    actions = canonicalize_rows(
+        [r if isinstance(r, dict) else {} for r in (payload.get("actions") or [])],
+        "action", warnings, "actions(json)")
+    tests = canonicalize_rows(
+        [r if isinstance(r, dict) else {} for r in (payload.get("tests") or [])],
+        "test", warnings, "tests(json)")
+    return actions, tests, warnings
+
+
+def normalize_payload_watchlist(payload: Optional[dict]) -> tuple[list[dict], list[str]]:
+    payload = payload or {}
+    warnings = [str(w) for w in (payload.get("warnings") or [])]
+    items = canonicalize_rows(
+        [r if isinstance(r, dict) else {} for r in (payload.get("items") or [])],
+        "topic", warnings, "watchlist(json)")
+    return items, warnings
 
 
 def extract_sources(text: str) -> list[str]:
@@ -179,12 +339,17 @@ def load_round_payloads(round_dir: str) -> Optional[dict]:
             p9_text = f.read()
 
     actions = _read_json(actions_path)
-    if actions is None:
-        parsed = parse_action_items(p9_text) if p9_text else {"actions": [], "tests": []}
-        actions = {"actions": parsed["actions"], "tests": parsed["tests"]}
+    actions, tests, action_warnings = normalize_payload_actions(actions)
+    if actions_path and not os.path.isfile(actions_path) and p9_text:
+        parsed = parse_action_items(p9_text)
+        actions, tests = parsed["actions"], parsed["tests"]
+        action_warnings = parsed["warnings"]
     watchlist = _read_json(watchlist_path)
-    if watchlist is None:
-        watchlist = {"items": parse_watchlist(p9_text) if p9_text else []}
+    watch_items, watch_warnings = normalize_payload_watchlist(watchlist)
+    if watchlist_path and not os.path.isfile(watchlist_path) and p9_text:
+        parsed_watch = parse_watchlist(p9_text)
+        watch_items = parsed_watch["items"]
+        watch_warnings = parsed_watch["warnings"]
     sources = _read_json(sources_path)
     if sources is None:
         urls: list[str] = []
@@ -194,7 +359,11 @@ def load_round_payloads(round_dir: str) -> Optional[dict]:
                     if url not in urls:
                         urls.append(url)
         sources = {"sources": [{"url": u} for u in urls], "documents": documents}
-    return {"actions": actions, "watchlist": watchlist, "sources": sources}
+    return {
+        "actions": {"actions": actions, "tests": tests, "warnings": action_warnings},
+        "watchlist": {"items": watch_items, "warnings": watch_warnings},
+        "sources": sources,
+    }
 
 
 def _diff_rows(old_rows: list, new_rows: list, key: str) -> dict:
@@ -295,19 +464,28 @@ def export_round_artifacts(round_dir: str, date: Optional[str] = None) -> Option
         with open(os.path.join(round_dir, p9_name), encoding="utf-8") as f:
             p9_text = f.read()
 
-    parsed = parse_action_items(p9_text) if p9_text else {"actions": [], "tests": []}
+    parsed = parse_action_items(p9_text) if p9_text else {
+        "actions": [], "tests": [], "warnings": ["未找到 P9 综合文档，无法抽取行动项"],
+    }
     actions_payload = {
+        "schema_version": SCHEMA_VERSION,
         "date": date,
         "generated_at": generated_at,
         "source_document": p9_name,
         "actions": parsed["actions"],
         "tests": parsed["tests"],
+        "warnings": parsed["warnings"],
+    }
+    watch_parsed = parse_watchlist(p9_text) if p9_text else {
+        "items": [], "warnings": ["未找到 P9 综合文档，无法抽取观察项"],
     }
     watchlist_payload = {
+        "schema_version": SCHEMA_VERSION,
         "date": date,
         "generated_at": generated_at,
         "source_document": p9_name,
-        "items": parse_watchlist(p9_text) if p9_text else [],
+        "items": watch_parsed["items"],
+        "warnings": watch_parsed["warnings"],
     }
 
     all_sources: dict[str, list[str]] = {}
@@ -346,6 +524,8 @@ def export_round_artifacts(round_dir: str, date: Optional[str] = None) -> Option
     }
     for filename, payload in written.items():
         _write_json(os.path.join(round_dir, filename), payload)
+    for warning in parsed["warnings"] + watch_parsed["warnings"]:
+        logger.warning("Round %s artifact contract: %s", date, warning)
     logger.info(
         "Round %s artifacts written: %d actions, %d tests, %d watchlist items, %d sources",
         date, len(actions_payload["actions"]), len(actions_payload["tests"]),

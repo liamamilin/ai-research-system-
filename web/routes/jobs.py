@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -24,9 +25,14 @@ from web.settings import get_settings
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
+logger = logging.getLogger("ai_research.web.jobs")
+
 _registry = TaskRegistry()
 
-PROMPT_VARIABLES = {"name", "keywords", "language", "date", "date_7d_ago", "time", "datetime"}
+PROMPT_VARIABLES = {
+    "name", "keywords", "language", "date", "date_1d_ago", "date_7d_ago",
+    "time", "datetime", "recent_outcomes",
+}
 OUTPUT_VARIABLES = {"name", "date", "time", "datetime"}
 TEMPLATE_CATEGORIES = {"monitoring", "research", "analysis", "practice", "actionable"}
 SCHEDULE_TYPES = {"manual", "daily", "weekly", "monthly"}
@@ -549,6 +555,39 @@ def cancel_job(name: str, request: Request, user=Depends(require_editor)):
         return {"ok": True, "cancelled": False, "message": "没有正在运行的 job"}
 
 
+@router.get("/{name:path}/logs")
+def get_job_logs(name: str, request: Request,
+                 run_id: Optional[str] = None,
+                 limit: int = 2000,
+                 user=Depends(require_viewer)):
+    """Persisted run logs for a job (survives refresh and server restarts)."""
+    settings = get_settings()
+    if not load_job(settings.paths.jobs_dir, name):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ApiError.make("not_found", f"Job 不存在: {name}"),
+        )
+    try:
+        from web.runner.log_store import read_events
+
+        runs, events = read_events(
+            settings.paths.logs_dir, name, run_id=run_id,
+            limit=max(1, min(int(limit), 20000)),
+        )
+    except Exception as exc:  # noqa: BLE001 - never 500 on log reads
+        logger.warning("Failed to read persisted logs for %s: %s", name, exc)
+        return {"runs": [], "events": [], "run": None}
+
+    current = _registry.get(name)
+    live = bool(current and current.is_running)
+    return {
+        "runs": runs,
+        "events": events,
+        "run": runs[0] if runs else None,
+        "live": live,
+    }
+
+
 @router.get("/{name:path}/stream")
 async def stream_job(name: str, request: Request, user=Depends(require_viewer)):
     """SSE endpoint: streams log + status events for a job.
@@ -557,9 +596,26 @@ async def stream_job(name: str, request: Request, user=Depends(require_viewer)):
     """
     task = _registry.get(name)
     if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=ApiError.make("no_task", f"没有找到运行记录: {name}"),
+        # An existing job with no run in this process is "idle", not an error:
+        # a 404 here makes EventSource retry in a loop and leaves the UI stuck
+        # on "waiting for logs" after the user starts a run.
+        settings = get_settings()
+        if not load_job(settings.paths.jobs_dir, name):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=ApiError.make("no_task", f"没有找到运行记录: {name}"),
+            )
+
+        async def idle_event():
+            yield _sse_format({"type": "status", "status": "idle"})
+
+        return StreamingResponse(
+            idle_event(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # Get last event id from header for reconnection

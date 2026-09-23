@@ -260,7 +260,8 @@ def test_builtin_templates_are_valid():
     repo_templates = os.path.join(os.path.dirname(os.path.dirname(__file__)), "jobs", "_templates")
     names = sorted(f for f in os.listdir(repo_templates) if f.endswith((".yaml", ".yml")))
     assert len(names) >= 10
-    allowed = {"name", "keywords", "language", "date", "date_7d_ago", "time", "datetime"}
+    allowed = {"name", "keywords", "language", "date", "date_1d_ago", "date_7d_ago",
+               "time", "datetime", "recent_outcomes"}
     categories = {"monitoring", "research", "analysis", "practice", "actionable"}
     for fn in names:
         with open(os.path.join(repo_templates, fn), encoding="utf-8") as f:

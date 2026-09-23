@@ -268,8 +268,9 @@ export function JobsListPage() {
               <textarea className="input font-mono text-xs min-h-[80px]" placeholder="Research {name} with keywords: {keywords}..."
                 value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
               <p className="text-[11px] text-text-muted/80 mt-1">
-                可用变量：{"{name}"} {"{keywords}"} {"{language}"} {"{date}"} {"{date_7d_ago}"}{" "}
-                {"{time}"} {"{datetime}"}；输出路径模板同样支持。建议写清：角色、目标、输出结构、每条发现的证据要求（发布日期 + 来源 URL）。
+                可用变量：{"{name}"} {"{keywords}"} {"{language}"} {"{date}"} {"{date_1d_ago}"}{" "}
+                {"{date_7d_ago}"} {"{time}"} {"{datetime}"} {"{recent_outcomes}"}（上一轮已判定结果）；
+                输出路径模板支持 {"{name}"} {"{date}"} {"{time}"} {"{datetime}"}。建议写清：角色、目标、输出结构、每条发现的证据要求（发布日期 + 来源 URL）。
               </p>
             </div>
             <div className="sm:col-span-2">

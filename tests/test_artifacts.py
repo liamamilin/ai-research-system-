@@ -68,7 +68,9 @@ def test_sections_do_not_leak_into_each_other():
 
 
 def test_parse_watchlist_extracts_rows():
-    items = artifacts.parse_watchlist(P9)
+    parsed = artifacts.parse_watchlist(P9)
+    items = parsed["items"]
+    assert parsed["warnings"] == []
     assert len(items) == 1
     assert items[0]["topic"] == "GPT-5.5 退役"
     assert items[0]["watch_point"] == "是否强制切换"

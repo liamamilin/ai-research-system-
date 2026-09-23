@@ -32,6 +32,20 @@ def list_actions(
     }
 
 
+@router.get("/outcomes")
+def list_outcomes(
+    limit: int = Query(20, ge=1, le=200),
+    days: int = Query(30, ge=1, le=365),
+    user=Depends(require_viewer),
+):
+    """Recent done/dropped decisions, used to feed the next round's prompt."""
+    ensure_tracking_db()
+    return {
+        "outcomes": tracking.recent_outcomes(limit=limit, days=days),
+        "prompt_block": tracking.format_outcomes(limit=min(limit, 20), days=days),
+    }
+
+
 @router.patch("/actions/{item_id}")
 def update_action(item_id: str, payload: dict, request: Request,
                   user=Depends(require_editor)):
@@ -56,7 +70,8 @@ def update_action(item_id: str, payload: dict, request: Request,
             status_code=status.HTTP_404_NOT_FOUND,
             detail=ApiError.make("not_found", "条目不存在"),
         )
-    tracking.set_status(item_id, new_status or existing["status"], note)
+    tracking.set_status(item_id, new_status or existing["status"], note,
+                        decided_by=user["username"])
     audit.log(
         "action_update",
         user=user["username"],

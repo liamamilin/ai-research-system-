@@ -26,6 +26,8 @@ prompt: |
   
   You are Practical AI Intelligence Chief Analyst.
 
+  {recent_outcomes}
+
   Read the radar documents from this round and generate the final synthesis report.
 
   Input documents (from this round):

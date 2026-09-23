@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from web.auth import db as user_db
 from web.auth.routes import router as auth_router
+from web.deps import require_admin
 from web.models import ApiError
 from web.ratelimit import RateLimitMiddleware
 from web.routes.jobs import router as jobs_router
@@ -138,7 +139,35 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok"}
+        """Liveness plus real dependency checks; 503 when something is broken."""
+        from core.health import run_checks
+
+        settings = get_settings()
+        result = run_checks(
+            state_dir=settings.paths.state_dir,
+            output_dir=settings.paths.output_dir,
+            config_dir=settings.paths.config_dir,
+            deep=False,
+        )
+        return JSONResponse(
+            status_code=503 if result["status"] == "error" else 200,
+            content=result,
+        )
+
+    @app.get("/api/health/detailed")
+    def health_detailed(user=Depends(require_admin)):
+        """Full health report including index, vector and last-round state."""
+        from core.health import run_checks, stale_locks
+
+        settings = get_settings()
+        result = run_checks(
+            state_dir=settings.paths.state_dir,
+            output_dir=settings.paths.output_dir,
+            config_dir=settings.paths.config_dir,
+            deep=True,
+        )
+        result["stale_locks"] = stale_locks(settings.paths.state_dir)
+        return result
 
     # ----- Static SPA (production) -----
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"

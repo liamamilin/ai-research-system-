@@ -326,8 +326,10 @@ class ResearchEngine:
             "language": job.get("language", "zh"),
             "date": now.strftime("%Y-%m-%d"),
             "date_7d_ago": (now - timedelta(days=7)).strftime("%Y-%m-%d"),
+            "date_1d_ago": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
             "time": now.strftime("%H-%M-%S"),
             "datetime": now.strftime("%Y-%m-%d_%H-%M-%S"),
+            "recent_outcomes": self._outcomes_block(),
         }
 
         # Simple {var} substitution
@@ -336,6 +338,16 @@ class ResearchEngine:
             result = result.replace("{" + key + "}", str(val))
 
         return result
+
+    @staticmethod
+    def _outcomes_block() -> str:
+        """Recent done/dropped action outcomes, for prompt feedback loops."""
+        try:
+            from core import tracking
+
+            return tracking.format_outcomes()
+        except Exception:  # noqa: BLE001 - never break a run over tracking
+            return ""
 
     # ------------------------------------------------------------------
     # Output path resolution

@@ -41,6 +41,10 @@ export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
     setEvents([]);
     setStreamStatus("connecting");
     errorCountRef.current = 0;
+    // Force a fresh subscription: the previous EventSource may have already
+    // terminated (idle/finished/error), and a run started right after would
+    // otherwise never be observed.
+    setNonce((n) => n + 1);
   }, []);
 
   const reconnect = useCallback(() => {
@@ -70,6 +74,8 @@ export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
         errorCountRef.current = 0;
 
         if (data.type === "status") {
+          // "idle" means the job exists but nothing is running in this
+          // process; treat it as a terminal state so the UI stops waiting.
           setStreamStatus("finished");
           es.close();
         } else if (data.type === "error") {

@@ -114,6 +114,27 @@ export async function deleteTemplate(key: string): Promise<{ ok: boolean; key: s
   return api(`/api/jobs/templates/${encodeURIComponent(key)}`, { method: "DELETE" });
 }
 
+export interface HealthCheck {
+  name: string;
+  status: "ok" | "warn" | "error";
+  detail: string;
+  [key: string]: unknown;
+}
+
+export interface HealthReport {
+  status: "ok" | "warn" | "error";
+  checked_at: string;
+  deep: boolean;
+  checks: HealthCheck[];
+  errors: string[];
+  warnings: string[];
+  stale_locks?: string[];
+}
+
+export async function getHealth(detailed = false): Promise<HealthReport> {
+  return api(detailed ? "/api/health/detailed" : "/api/health");
+}
+
 export interface JobCategory {
   name: string;
   count: number;
@@ -125,6 +146,37 @@ export async function listJobCategories(): Promise<{ categories: JobCategory[] }
 
 export async function cancelJob(name: string): Promise<{ ok: boolean; cancelled: boolean }> {
   return api(`/api/jobs/${encodeURIComponent(name)}/cancel`, { method: "POST" });
+}
+
+export interface PersistedRun {
+  run_id: string;
+  status: string;
+  started_at: string;
+  finished_at: string;
+  events: number;
+}
+
+export interface PersistedLogRecord {
+  run_id: string;
+  ts: string;
+  event: LogEventLike;
+}
+
+export interface LogEventLike {
+  type?: string;
+  level?: string;
+  message?: string;
+  status?: string;
+  phase?: string;
+  event_type?: string;
+  [key: string]: unknown;
+}
+
+export async function getJobLogs(
+  name: string,
+  params?: { run_id?: string; limit?: number }
+): Promise<{ runs: PersistedRun[]; events: PersistedLogRecord[]; run: PersistedRun | null; live: boolean }> {
+  return api(`/api/jobs/${encodeURIComponent(name)}/logs`, { query: params as any });
 }
 
 export async function getJobHistory(name: string, limit = 50): Promise<any[]> {

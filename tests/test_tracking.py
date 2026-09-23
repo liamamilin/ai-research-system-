@@ -30,7 +30,10 @@ def test_item_id_stable_across_numbering_and_whitespace():
 
 def test_sync_round_creates_items(db):
     counts = tracking.sync_round("2026-01-01", ACTIONS, TESTS, WATCH)
-    assert counts == {"new": 4, "updated": 0}
+    assert counts["new"] == 4
+    assert counts["updated"] == 0
+    assert counts["merged"] == 0
+    assert counts["warnings"] == []
     items = tracking.list_items()
     assert {i["kind"] for i in items} == {"action", "test", "watch"}
     first = next(i for i in items if i["kind"] == "action")

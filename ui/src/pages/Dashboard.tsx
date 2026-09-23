@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { listJobs, getUsage, getReportStats, getRatings, type UsageSummary, type RatingSummary } from "@/api";
+import { listJobs, getUsage, getReportStats, getRatings, getHealth, type UsageSummary, type RatingSummary, type HealthReport } from "@/api";
 import type { JobSummary } from "@/api/types";
 import { cn, timeAgo, formatTokens } from "@/lib/utils";
 
@@ -23,6 +23,8 @@ export function DashboardPage() {
   const [usage, setUsage] = useState<UsageSummary | null>(null);
   const [reportStats, setReportStats] = useState<{ total: number; total_size_bytes: number; categories: number } | null>(null);
   const [ratings, setRatings] = useState<RatingSummary | null>(null);
+  const [health, setHealth] = useState<HealthReport | null>(null);
+  const [healthOpen, setHealthOpen] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,6 +34,7 @@ export function DashboardPage() {
     getUsage(30).then(setUsage).catch(() => setUsage(null));
     getReportStats().then(setReportStats).catch(() => setReportStats(null));
     getRatings().then(setRatings).catch(() => setRatings(null));
+    getHealth().then(setHealth).catch(() => setHealth(null));
   }, []);
 
   const total = jobs.length;
@@ -53,7 +56,51 @@ export function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-semibold">总览</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-lg font-semibold flex-1">总览</h1>
+        {health && (
+          <button
+            onClick={() => setHealthOpen((v) => !v)}
+            className="text-xs"
+            title={health.checks.map((c) => `${c.name}: ${c.status} — ${c.detail}`).join("\n")}
+          >
+            <span
+              className={cn(
+                "badge border",
+                health.status === "ok"
+                  ? "bg-green-900/40 text-green-400 border-green-800"
+                  : health.status === "warn"
+                    ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
+                    : "bg-red-900/40 text-red-400 border-red-800"
+              )}
+            >
+              系统 {health.status === "ok" ? "正常" : health.status === "warn" ? `注意 ${health.warnings.length}` : `异常 ${health.errors.length}`}
+            </span>
+          </button>
+        )}
+      </div>
+
+      {health && healthOpen && (
+        <div className="card p-3 space-y-1.5">
+          <div className="text-xs text-text-muted">
+            检查于 {health.checked_at}（不含索引/向量/轮次等深度检查）
+          </div>
+          <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1">
+            {health.checks.map((c) => (
+              <div key={c.name} className="flex items-start gap-2 text-xs">
+                <span
+                  className={cn(
+                    "mt-0.5 w-1.5 h-1.5 rounded-full shrink-0",
+                    c.status === "ok" ? "bg-success" : c.status === "warn" ? "bg-warning" : "bg-danger"
+                  )}
+                />
+                <span className="font-mono">{c.name}</span>
+                <span className="text-text-muted truncate">{c.detail}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {stats.map((s) => (
@@ -104,7 +151,7 @@ export function DashboardPage() {
       )}
 
       {/* Usage (last 30 days) */}
-      {usage && usage.totals.runs > 0 && (
+      {usage && (usage.totals?.runs ?? 0) > 0 && (
         <div className="card">
           <div className="px-4 py-3 border-b border-border font-medium text-sm flex items-center gap-2">
             用量（近 30 天）

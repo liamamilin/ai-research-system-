@@ -155,10 +155,13 @@ echo ""
 echo "=============================================="
 if $ALL_OK; then
     echo " Pipeline completed: ALL STAGES OK"
+    FINAL_RC=0
 else
     echo " Pipeline completed: SOME STAGES FAILED"
+    FINAL_RC=1
 fi
 echo " Log: $LOG_FILE"
 echo " Finished: $(date)"
 echo "=============================================="
 echo ""
+exit $FINAL_RC
