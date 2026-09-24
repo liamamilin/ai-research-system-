@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { JobTemplate } from "@/api";
 import { cn } from "@/lib/utils";
+import { Modal } from "@/components/Modal";
 
 const CATEGORY_LABELS: Record<string, string> = {
   monitoring: "监控速报",
@@ -167,14 +168,9 @@ export function TemplateGrid({
       )}
 
       {preview && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setPreview(null)}
-        >
-          <div
-            className="card w-full max-w-3xl max-h-[85vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <Modal open={!!preview} onClose={() => setPreview(null)}
+               title={preview.label || preview.key}
+               className="w-full max-w-3xl max-h-[85vh]">
             <div className="px-4 py-3 border-b border-border flex items-center gap-2">
               <span className="font-medium text-sm">{preview.label || preview.key}</span>
               <span className="badge border border-border text-[10px] text-text-muted">
@@ -202,8 +198,7 @@ export function TemplateGrid({
                 {preview.prompt || preview.content}
               </pre>
             </div>
-          </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

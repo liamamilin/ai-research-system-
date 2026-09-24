@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { changePassword, listMySessions, revokeMySession, logout, listApiTokens, createApiToken, revokeApiToken, type ApiToken } from "@/api";
 import { useAuthStore } from "@/lib/auth-store";
 import { useToast } from "@/lib/toast";
-import { X } from "lucide-react";
+import { Modal } from "@/components/Modal";
 
 interface Session {
   jti: string;
@@ -69,8 +69,6 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     }
   };
 
-  if (!open) return null;
-
   const handleSubmit = async () => {
     setMsg("");
     setErr("");
@@ -112,17 +110,13 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     }
   };
 
+  const dirty = next.length > 0 || confirm.length > 0 || (newToken || "").length > 0;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div
-        className="card p-5 w-full max-w-md space-y-4 max-h-[85vh] overflow-y-auto"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal open={open} onClose={onClose} title="账号设置" dirty={dirty}
+           className="w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="flex items-center">
           <h2 className="text-sm font-semibold flex-1">账号设置</h2>
-          <button onClick={onClose} className="btn p-1" aria-label="关闭">
-            <X className="w-4 h-4" />
-          </button>
         </div>
 
         <div className="text-xs text-text-muted">
@@ -239,7 +233,6 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -9,6 +9,7 @@ import {
   type JobTemplate,
   type TemplateInput,
 } from "@/api";
+import { Modal } from "@/components/Modal";
 import { TemplateGrid, categoryLabel } from "./TemplateGrid";
 
 const CATEGORIES = ["monitoring", "research", "analysis", "practice", "actionable"];
@@ -187,12 +188,18 @@ export function TemplateLibrary({ open, onClose, onUse }: Props) {
 
   if (!open) return null;
 
+  // Unsaved template edits: the editor holds prompt text the user typed.
+  const dirty = mode !== "list" && (
+    form.key !== EMPTY.key || form.label !== EMPTY.label
+    || form.description !== EMPTY.description || form.prompt !== EMPTY.prompt
+    || form.category !== EMPTY.category || form.output !== EMPTY.output
+    || form.keywords !== EMPTY.keywords || form.timeout !== EMPTY.timeout
+    || form.language !== EMPTY.language || form.scheduleType !== EMPTY.scheduleType
+  );
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
-      <div
-        className="card w-full max-w-5xl max-h-[88vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <Modal open={open} onClose={onClose} title="Prompt 模板库" dirty={dirty}
+           className="w-full max-w-5xl max-h-[88vh]">
         <div className="px-4 py-3 border-b border-border flex items-center gap-2">
           <span className="font-medium text-sm">Prompt 模板库</span>
           <span className="text-xs text-text-muted">
@@ -382,7 +389,6 @@ export function TemplateLibrary({ open, onClose, onUse }: Props) {
             emptyHint="还没有模板，点「+ 新建模板」或从现有 job 导入。"
           />
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

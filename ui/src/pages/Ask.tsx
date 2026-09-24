@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Database, Search, Sparkles } from "lucide-react";
+import { Database, Loader2, Search, Sparkles } from "lucide-react";
 
 import { askQuestion, reindexVectors, type QaAnswer } from "@/api";
 import { useAuthStore } from "@/lib/auth-store";
@@ -24,6 +24,8 @@ export function AskPage() {
   const [reindexing, setReindexing] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [pending, setPending] = useState("");
+  const requestId = useRef(0);
 
   const handleAsk = async (value?: string) => {
     const q = (value ?? question).trim();
@@ -31,16 +33,26 @@ export function AskPage() {
       setError("请输入至少 2 个字符的问题");
       return;
     }
+    // Supersede any in-flight request: a slower earlier answer must not
+    // overwrite the answer to the question the user actually asked last.
+    const id = ++requestId.current;
     setBusy(true);
     setError("");
     setNotice("");
+    setPending(q);
     setResult(null);
     try {
-      setResult(await askQuestion(q));
+      const answer = await askQuestion(q);
+      if (id !== requestId.current) return;
+      setResult(answer);
     } catch (err: unknown) {
+      if (id !== requestId.current) return;
       setError(err instanceof Error ? err.message : "提问失败");
     } finally {
-      setBusy(false);
+      if (id === requestId.current) {
+        setBusy(false);
+        setPending("");
+      }
     }
   };
 
@@ -108,6 +120,14 @@ export function AskPage() {
         )}
       </div>
 
+      {busy && (
+        <div className="card p-4 flex items-center gap-3 text-sm" role="status" aria-live="polite">
+          <Loader2 className="w-4 h-4 animate-spin text-accent shrink-0" />
+          <span className="text-text-muted">正在检索报告并生成回答…</span>
+          <span className="text-xs text-text-muted/70 truncate ml-auto max-w-[50%]">{pending}</span>
+        </div>
+      )}
+
       {notice && (
         <div className="text-xs text-text-muted bg-bg-card border border-border rounded-md px-3 py-2">
           {notice}
@@ -131,6 +151,13 @@ export function AskPage() {
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.answer}</ReactMarkdown>
             </div>
           </div>
+
+          {result.citations.length === 0 && (
+            <div role="alert"
+              className="rounded-md border border-warning/50 bg-amber-900/10 px-3 py-2 text-xs text-warning">
+              本次检索没有命中任何报告，下面这段回答没有报告作为依据，仅供参考。
+            </div>
+          )}
 
           {result.citations.length > 0 && (
             <div className="card p-4 space-y-2">
