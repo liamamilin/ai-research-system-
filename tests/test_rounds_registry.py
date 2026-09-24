@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 import pytest
 
@@ -160,3 +161,40 @@ def test_round_start_cli_flag(tmp_path, monkeypatch, capsys):
     assert "2026-09-24" in capsys.readouterr().out
     written = json.loads((tmp_state / "pipeline_rounds.json").read_text(encoding="utf-8"))
     assert written["2026-09-24"]["status"] == "running"
+
+
+def test_round_start_records_a_real_trigger(tmp_path, monkeypatch):
+    """A hand-run must not be recorded as a cron fire.
+
+    The trigger used to be hardcoded to "cron", so a manual run satisfied the
+    missed-run detector and a dead schedule could look healthy indefinitely.
+    """
+    import subprocess
+    import sys as _sys
+
+    repo = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env["AREC_ROUND_TRIGGER"] = "manual"
+    env["AI_RESEARCH_ENV"] = "test"
+
+    def run_cli(*args):
+        # cwd=tmp_path so "state/" resolves inside the tmp dir: the registry is
+        # relative to the working directory and must not touch the real one.
+        return subprocess.run(
+            [_sys.executable, str(repo / "run.py"), *args],
+            capture_output=True, text=True, env=env, cwd=str(tmp_path))
+
+    result = run_cli("--round-start", "2026-09-24")
+    assert result.returncode == 0, result.stderr
+    assert "trigger=manual" in result.stdout
+
+    import json
+    registry = json.loads((tmp_path / "state" / "pipeline_rounds.json").read_text())
+    assert registry["2026-09-24"]["trigger"] == "manual"
+
+    # The explicit flag wins over the environment. A new date, because the
+    # registry keeps the first trigger of the day on purpose.
+    result = run_cli("--round-start", "2026-09-25", "--round-trigger", "cron")
+    assert "trigger=cron" in result.stdout
+    registry = json.loads((tmp_path / "state" / "pipeline_rounds.json").read_text())
+    assert registry["2026-09-25"]["trigger"] == "cron"

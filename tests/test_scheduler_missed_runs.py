@@ -242,3 +242,74 @@ def test_timestamps_with_and_without_offsets_compare(tmp_path):
 
     assert result["status"] == "ok"
     assert result["last_ran_at"].startswith("2026-09-24")
+
+
+def test_a_manual_round_does_not_satisfy_the_cron_watchdog(tmp_path):
+    """Running the pipeline by hand says nothing about cron.
+
+    The registry used to hardcode trigger="cron", so a daily manual run kept the
+    missed-run detector reporting "no missed runs" while the schedule itself
+    could be dead for weeks.
+    """
+    import json
+    import os
+
+    state = tmp_path / "state"
+    state.mkdir()
+    with open(os.path.join(state, "pipeline_rounds.json"), "w", encoding="utf-8") as fh:
+        json.dump({"2026-09-24": {
+            "date": "2026-09-24", "status": "success", "trigger": "manual",
+            "finished_at": "2026-09-24T18:24:16+0800",
+        }}, fh)
+
+    evidence = scheduler._pipeline_evidence(
+        "bash scripts/run_practical_intelligence.sh", str(state), str(tmp_path))
+    assert evidence["cron_evidence"] is False
+
+    result = scheduler.classify_jobs([DAILY_6AM], state_dir=str(state),
+                                     repo_dir=str(tmp_path),
+                                     now=datetime(2026, 9, 24, 20, 0))[0]
+    assert result["status"] == "unverified"
+    assert "手动运行" in result["detail"]
+    assert "不能证明" in result["detail"]
+
+
+def test_a_cron_round_does_satisfy_the_watchdog(tmp_path):
+    import json
+    import os
+
+    state = tmp_path / "state"
+    state.mkdir()
+    with open(os.path.join(state, "pipeline_rounds.json"), "w", encoding="utf-8") as fh:
+        json.dump({"2026-09-24": {
+            "date": "2026-09-24", "status": "success", "trigger": "cron",
+            "finished_at": "2026-09-24T06:24:16+0800",
+        }}, fh)
+
+    result = scheduler.classify_jobs([DAILY_6AM], state_dir=str(state),
+                                     repo_dir=str(tmp_path),
+                                     now=datetime(2026, 9, 24, 20, 0))[0]
+    assert result["status"] == "ok"
+
+
+def test_a_header_without_a_schedule_line_is_reported(monkeypatch):
+    """A rewritten crontab can keep the comment and lose the schedule."""
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
+        "# Practical AI Intelligence - daily 06:00",
+        "# cron_id: practical_ai_intelligence",
+        "",
+    ])
+    assert scheduler.orphan_headers() == ["practical_ai_intelligence"]
+
+    report = scheduler.schedule_health(state_dir="state", repo_dir=".")
+    assert report["status"] == "error"
+    assert "只剩注释头" in report["detail"]
+    assert report["orphan_headers"] == ["practical_ai_intelligence"]
+
+
+def test_healthy_crontab_has_no_orphan_headers(monkeypatch):
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
+        "# cron_id: job_a",
+        "0 6 * * * bash a.sh",
+    ])
+    assert scheduler.orphan_headers() == []

@@ -12,6 +12,7 @@ Usage:
   python run.py --validate       # Validate configs
 """
 
+import os
 import sys
 import argparse
 import logging
@@ -57,6 +58,9 @@ Templates: copy from jobs/_templates/ to create new jobs""",
                    help="Send a test notification to every configured channel")
     p.add_argument("--round-start", nargs="?", const=True, default=False,
                    help="Mark a pipeline round as started (date = today by default)")
+    p.add_argument("--round-trigger", default="",
+                   help="What started the round: cron / manual / web "
+                        "(default: $AREC_ROUND_TRIGGER, else manual)")
     p.add_argument("--round-finish", nargs="?", const=True, default=False,
                    metavar="DATE",
                    help="Export artifacts, sync tracking and send the digest "
@@ -173,8 +177,12 @@ def main():
 
         date = (args.round_start if isinstance(args.round_start, str)
                 else datetime.now().strftime("%Y-%m-%d"))
-        entry = upsert_round(date, status="running", trigger="cron")
-        print(f"  ✓ round {date} marked running (trigger=cron)")
+        # The trigger must be what actually started this run. Hardcoding
+        # "cron" made a manual run satisfy the cron watchdog, so a broken
+        # schedule could look healthy as long as someone ran it by hand.
+        trigger = args.round_trigger or os.environ.get("AREC_ROUND_TRIGGER") or "manual"
+        entry = upsert_round(date, status="running", trigger=trigger)
+        print(f"  ✓ round {date} marked running (trigger={trigger})")
         sys.exit(0 if entry else 1)
 
     if args.round_finish is not False:

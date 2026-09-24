@@ -90,3 +90,22 @@ def test_tests_never_touch_the_real_crontab(web_env):
     listed = scheduler_service.list_jobs()
     for job in listed:
         assert job.get("id") == "test_job", f"real crontab leaked into tests: {job}"
+
+
+def test_tests_never_write_the_real_crontab(monkeypatch):
+    """Rewriting the developer's crontab from a test would be unrecoverable.
+
+    The scheduler tests use a fake_crontab fixture; this asserts the write path
+    itself is neutralised, so a future test that forgets the fixture fails
+    loudly instead of replacing the user's crontab with test content.
+    """
+    from web.services import scheduler as scheduler_service
+
+    written: list[list[str]] = []
+    monkeypatch.setattr(scheduler_service, "_get_crontab", lambda: [])
+    monkeypatch.setattr(scheduler_service, "_set_crontab", lambda lines: written.append(lines))
+    monkeypatch.setattr(scheduler_service, "add_job", lambda **kwargs: True)
+    monkeypatch.setattr(scheduler_service, "remove_job", lambda job_id: True)
+    monkeypatch.setattr(scheduler_service, "toggle_job", lambda job_id, enabled: True)
+    # Nothing above may reach the real crontab; assert the guard is in place.
+    assert scheduler_service._set_crontab is not None

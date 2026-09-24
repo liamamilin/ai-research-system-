@@ -73,7 +73,11 @@ ALL_OK=true
 # Mark the round as started so the Rounds page and health checks see it
 # ------------------------------------------------------------------
 ROUND_DATE="$(date '+%Y-%m-%d')"
-$RUN --round-start "$ROUND_DATE" || echo "  ⚠ [Round] could not record round start"
+# Only cron exports AREC_ROUND_TRIGGER=cron; a hand-run stays "manual" so the
+# missed-run detector does not mistake it for a schedule that actually fired.
+ROUND_TRIGGER="${AREC_ROUND_TRIGGER:-manual}"
+$RUN --round-start "$ROUND_DATE" --round-trigger "$ROUND_TRIGGER" \
+    || echo "  ⚠ [Round] could not record round start"
 
 # ------------------------------------------------------------------
 # Budget guard (skip with SKIP_BUDGET_CHECK=1)

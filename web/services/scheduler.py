@@ -344,6 +344,7 @@ def _pipeline_evidence(command: str, state_dir: str, repo_dir: str) -> Optional[
                 continue
             signals.append({"source": "pipeline_rounds", "at": finished,
                             "kind": "round",
+                            "trigger": round_row.get("trigger", ""),
                             "round": round_row.get("round_date") or round_row.get("date")})
     except Exception:  # noqa: BLE001 - evidence gathering must not fail health
         pass
@@ -352,8 +353,14 @@ def _pipeline_evidence(command: str, state_dir: str, repo_dir: str) -> Optional[
     # Copy before attaching the full list: the newest signal is itself a member
     # of `signals`, so assigning it in place builds a cycle and any JSON
     # encoder walking the result recurses forever.
-    newest = dict(max(signals, key=lambda s: _sort_key(s["at"])))
+    # Only a cron-triggered round proves the *schedule* fired. A hand-run proves
+    # the pipeline works, and nothing about cron — counting it would let a broken
+    # schedule stay "healthy" forever as long as someone ran it manually.
+    cron_signals = [s for s in signals
+                    if s.get("trigger") == "cron" or s.get("kind") == "log"]
+    newest = dict(max(cron_signals or signals, key=lambda s: _sort_key(s["at"])))
     newest["all_signals"] = signals
+    newest["cron_evidence"] = bool(cron_signals)
     return newest
 
 
@@ -440,6 +447,17 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             result["detail"] = "该任务没有本地运行证据，无法判断是否漏跑"
             results.append(result)
             continue
+        if not evidence.get("cron_evidence", True):
+            result["status"] = "unverified"
+            result["status"] = "unverified"
+            result["last_ran_at"] = evidence["at"]
+            result["evidence"] = evidence
+            result["detail"] = (
+                "最近一次是手动运行，不能证明 cron 真的触发过；"
+                "要判断调度是否漏跑，请等待下一个计划时间"
+            )
+            results.append(result)
+            continue
         ran_at = _parse_iso(evidence["at"])
         if ran_at is not None:
             ran_at = _as_aware(ran_at)
@@ -476,6 +494,27 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
     return results
 
 
+def orphan_headers() -> list[str]:
+    """cron_id headers whose command line is gone.
+
+    A crontab rewritten by something else can keep the ``# cron_id:`` comment
+    while losing the schedule line, which makes the job vanish silently: the
+    list is empty, nothing errors, and the pipeline simply stops. This is what a
+    truncated crontab looks like, and it is worth saying out loud.
+    """
+    try:
+        lines = _get_crontab()
+    except Exception:  # noqa: BLE001 - crontab may be unavailable
+        return []
+    listed = {job["id"] for job in list_jobs()}
+    orphans: list[str] = []
+    for line in lines:
+        match = _CRON_ID_RE.match(line)
+        if match and match.group(1) not in listed:
+            orphans.append(match.group(1))
+    return orphans
+
+
 def schedule_health(state_dir: str = "state", repo_dir: str = ".",
                      now: Optional["datetime"] = None) -> dict:
     """Aggregate schedule state for the health report."""
@@ -484,8 +523,15 @@ def schedule_health(state_dir: str = "state", repo_dir: str = ".",
     except Exception as exc:  # noqa: BLE001 - crontab may be unavailable
         return {"status": "unknown", "detail": f"无法读取 crontab：{exc}", "jobs": []}
     classified = classify_jobs(jobs, state_dir=state_dir, repo_dir=repo_dir, now=now)
+    orphans = orphan_headers()
     overdue = [j for j in classified if j["status"] == "overdue"]
     paused = [j for j in classified if j["status"] == "paused"]
+    if orphans:
+        return {"status": "error", "detail": (
+            f"crontab 里有 {len(orphans)} 个任务只剩注释头、调度行已丢失："
+            + "、".join(orphans) + "（请检查 crontab 是否被覆盖）"),
+            "jobs": classified, "overdue": len(overdue), "paused": len(paused),
+            "orphan_headers": orphans}
     if overdue:
         status = "error"
         detail = (f"{len(overdue)} 个调度任务应运行但没有运行证据："
