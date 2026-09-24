@@ -18,61 +18,9 @@ import time
 import pytest
 
 from web.indexer import watcher
+from conftest import write_report as _write
 
 watchfiles = pytest.importorskip("watchfiles")
-
-
-@pytest.fixture()
-def watcher_env(tmp_path, monkeypatch):
-    """Isolated output dir + reports DB, with watchers stopped before teardown.
-
-    Depends on monkeypatch so this fixture is finalized *before* monkeypatch
-    undoes the DB path override — otherwise a lingering watcher thread would
-    write into the next test's database (or the real one).
-    """
-    from web.indexer import db as index_db
-    from web.indexer import vector_sync
-
-    state = tmp_path / "state"
-    output = tmp_path / "output"
-    state.mkdir()
-    output.mkdir()
-    monkeypatch.setattr(index_db, "_DB_PATH_OVERRIDE", str(state / "reports.db"))
-    index_db.init_db()
-    vector_sync.reset_client()
-    monkeypatch.setattr(vector_sync, "_embedding_client", lambda: None)
-
-    started: list[tuple[threading.Event, object]] = []
-    out_dir = output
-    state_dir = state
-
-    class Env:
-        output = out_dir
-        state = state_dir
-
-        @staticmethod
-        def start(watcher, **kwargs):
-            stop = threading.Event()
-            thread = watcher.start_watcher(str(out_dir), stop_event=stop, **kwargs)
-            started.append((stop, thread))
-            return thread
-
-    try:
-        yield Env()
-    finally:
-        for stop, _thread in started:
-            stop.set()
-        for _stop, thread in started:
-            thread.join(timeout=5)
-        vector_sync.reset_client()
-
-
-def _write(output, rel, text="# Title\n\nbody about steam and indie games\n"):
-    path = os.path.join(str(output), rel)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-    return path
 
 
 # --- enum contract (the original bug) --------------------------------------
@@ -266,20 +214,16 @@ def _wait_for(predicate, timeout: float, interval: float = 0.2) -> None:
     raise AssertionError(f"condition not met within {timeout}s")
 
 
-def test_watcher_writes_a_heartbeat(tmp_path):
+def test_watcher_writes_a_heartbeat(watcher_env):
     """A dead watcher must leave evidence, not just a log line nobody reads."""
-    state = tmp_path / "state"
-    state.mkdir()
-    output = tmp_path / "output"
-    output.mkdir()
-    stop = threading.Event()
-    thread = watcher.start_watcher(str(output), state_dir=str(state),
-                                   stop_event=stop, reconcile_seconds=1)
+    state = str(watcher_env.state)
+    output = str(watcher_env.output)
+    thread = watcher_env.start(watcher, reconcile_seconds=1)
     try:
         deadline = time.time() + 5
         beat = None
         while time.time() < deadline:
-            beat = watcher.read_heartbeat(str(state))
+            beat = watcher.read_heartbeat(str(watcher_env.state))
             if beat:
                 break
             time.sleep(0.1)
@@ -289,25 +233,19 @@ def test_watcher_writes_a_heartbeat(tmp_path):
         assert beat["indexed"] == 0
         assert beat["started_at"]
     finally:
-        stop.set()
-        thread.join(timeout=5)
+        watcher_env.stop()
 
 
-def test_heartbeat_records_indexed_updates(tmp_path):
-    state = tmp_path / "state"
-    state.mkdir()
-    output = tmp_path / "output"
-    output.mkdir()
-    stop = threading.Event()
-    thread = watcher.start_watcher(str(output), state_dir=str(state),
-                                   stop_event=stop, poll_delay_ms=100)
+def test_heartbeat_records_indexed_updates(watcher_env):
+    state = str(watcher_env.state)
+    output = str(watcher_env.output)
+    watcher_env.start(watcher, reconcile_seconds=1, poll_delay_ms=100)
     try:
-        report = output / "heartbeat_probe.md"
-        report.write_text("# probe\n\nbody", encoding="utf-8")
+        _write(output, "research/heartbeat_probe.md", "# probe\n\nbody about probe\n")
         deadline = time.time() + 8
         indexed = 0
         while time.time() < deadline:
-            beat = watcher.read_heartbeat(str(state)) or {}
+            beat = watcher.read_heartbeat(str(watcher_env.state)) or {}
             indexed = beat.get("indexed", 0)
             if indexed:
                 assert beat["last_event_at"]
@@ -315,11 +253,10 @@ def test_heartbeat_records_indexed_updates(tmp_path):
             time.sleep(0.1)
         assert indexed >= 1, "heartbeat did not record the incremental update"
     finally:
-        stop.set()
-        thread.join(timeout=5)
+        watcher_env.stop()
 
 
-def test_reconcile_runs_without_file_events(tmp_path, monkeypatch):
+def test_reconcile_runs_without_file_events(watcher_env, monkeypatch):
     """The self-heal must not depend on activity.
 
     Deleting a report produces exactly one delete event; if the periodic
@@ -329,31 +266,24 @@ def test_reconcile_runs_without_file_events(tmp_path, monkeypatch):
     from web.indexer import db as index_db
     from web.indexer import vector_sync
 
-    state = tmp_path / "state"
-    state.mkdir()
-    output = tmp_path / "output"
-    output.mkdir()
-    (output / "quiet.md").write_text("# quiet\n", encoding="utf-8")
+    _write(watcher_env.output, "quiet.md", "# quiet\n")
 
     calls = []
     monkeypatch.setattr(index_db, "prune_missing", lambda d: calls.append(d) or 0)
     monkeypatch.setattr(vector_sync, "prune_orphans", lambda d: None)
 
-    stop = threading.Event()
-    thread = watcher.start_watcher(str(output), state_dir=str(state),
-                                   stop_event=stop, reconcile_seconds=1)
+    watcher_env.start(watcher, reconcile_seconds=1)
     try:
         deadline = time.time() + 12
         while time.time() < deadline and len(calls) < 2:
             time.sleep(0.2)
     finally:
-        stop.set()
-        thread.join(timeout=5)
+        watcher_env.stop()
 
     assert len(calls) >= 2, (
         "reconcile did not run on a timer in a quiet directory "
         f"(calls={len(calls)})"
     )
-    beat = watcher.read_heartbeat(str(state)) or {}
+    beat = watcher.read_heartbeat(str(watcher_env.state)) or {}
     assert beat.get("reconciles", 0) >= 1
     assert beat.get("last_reconcile_at")

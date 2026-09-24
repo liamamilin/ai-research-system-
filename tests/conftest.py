@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -115,3 +117,68 @@ def client(app):
     from fastapi.testclient import TestClient
 
     return TestClient(app)
+
+
+# --- shared index-isolation fixture -----------------------------------------
+# A watcher started without redirecting the index database writes its fixtures
+# into the live reports.db, which then reports reports that do not exist on
+# disk. Every test that starts a watcher goes through this fixture.
+
+@pytest.fixture()
+def watcher_env(tmp_path, monkeypatch):
+    """Isolated output dir + reports DB, with watchers stopped before teardown.
+
+    Depends on monkeypatch so this fixture is finalized *before* monkeypatch
+    undoes the DB path override — otherwise a lingering watcher thread would
+    write into the next test's database (or the real one).
+    """
+    from web.indexer import db as index_db
+    from web.indexer import vector_sync
+
+    state = tmp_path / "state"
+    output = tmp_path / "output"
+    state.mkdir()
+    output.mkdir()
+    monkeypatch.setattr(index_db, "_DB_PATH_OVERRIDE", str(state / "reports.db"))
+    index_db.init_db()
+    vector_sync.reset_client()
+    monkeypatch.setattr(vector_sync, "_embedding_client", lambda: None)
+
+    started: list[tuple[threading.Event, object]] = []
+    out_dir = output
+    state_dir = state
+
+    class Env:
+        output = out_dir
+        state = state_dir
+
+        @staticmethod
+        def start(watcher, **kwargs):
+            stop = threading.Event()
+            kwargs.setdefault("state_dir", str(state_dir))
+            thread = watcher.start_watcher(str(out_dir), stop_event=stop, **kwargs)
+            started.append((stop, thread))
+            return thread
+
+        @staticmethod
+        def stop():
+            for stop, thread in started:
+                stop.set()
+            for _stop, thread in started:
+                thread.join(timeout=5)
+            started.clear()
+
+    try:
+        yield Env()
+    finally:
+        Env.stop()
+        vector_sync.reset_client()
+
+
+def write_report(output, rel, text="# Title\n\nbody about steam and indie games\n"):
+    """Create a report file below ``output`` and return its path."""
+    path = os.path.join(str(output), rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
