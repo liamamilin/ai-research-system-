@@ -115,6 +115,10 @@ def load_job(jobs_dir: str, job_name: str) -> Optional[dict]:
     with open(path, "r", encoding="utf-8") as f:
         job = yaml.safe_load(f) or {}
     job["_file"] = resolved
+    try:
+        job["_mtime"] = os.path.getmtime(path)
+    except OSError:
+        job["_mtime"] = 0.0
     return job
 
 

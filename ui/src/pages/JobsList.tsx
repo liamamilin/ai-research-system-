@@ -34,6 +34,12 @@ export function JobsListPage() {
   const [filter, setFilter] = useState("");
   const [error, setError] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  // The same questions the reports page answers: what is new, what is running,
+  // what did I just create.
+  const [statusFilter, setStatusFilter] = useState<"all" | "enabled" | "disabled" | "running">("all");
+  const [range, setRange] = useState<"all" | "today" | "7d" | "30d">("all");
+  const [sort, setSort] = useState<"modified" | "name" | "ran" | "never">("modified");
+  const [highlight, setHighlight] = useState<string | null>(null);
   const [categories, setCategories] = useState<JobCategory[]>([]);
   const user = useAuthStore((s) => s.user);
   const canEdit = user?.role === "editor" || user?.role === "admin";
@@ -120,7 +126,17 @@ export function JobsListPage() {
         output: form.output || undefined,
       });
       setShowCreate(false);
+      const created = form.name.trim();
       setForm({ name: "", template: "", category: "", description: "", language: "zh", keywords: "", prompt: "", output: "" });
+      // A new job must be visible: any active filter could hide it, and the
+      // category it landed in may not be the selected one.
+      setFilter("");
+      setRange("all");
+      setStatusFilter("all");
+      setCategoryFilter("");
+      setSort("modified");
+      setHighlight(created);
+      window.setTimeout(() => setHighlight(null), 8000);
       fetchJobs();
       fetchCategories();
     } catch (err: any) {
@@ -130,21 +146,57 @@ export function JobsListPage() {
     }
   };
 
+  const matchesTime = (j: JobSummary) => {
+    if (range === "all") return true;
+    const stamp = j.file_mtime;
+    if (!stamp) return false;
+    // file_mtime is epoch seconds; Date.now() is milliseconds.
+    const days = (Date.now() - stamp * 1000) / 86_400_000;
+    if (range === "today") return days < 1;
+    if (range === "7d") return days <= 7;
+    return days <= 30;
+  };
+
+  const visible = jobs.filter((j) => {
+    if (statusFilter === "enabled" && !j.enabled) return false;
+    if (statusFilter === "disabled" && j.enabled) return false;
+    if (statusFilter === "running" && !j.is_running) return false;
+    if (!matchesTime(j)) return false;
+    if (filter) {
+      const q = filter.toLowerCase();
+      const hay = [j.name, j.description, ...(j.keywords || [])].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const sortValue = (j: JobSummary): number => {
+    if (sort === "modified") return -(j.file_mtime || 0);
+    if (sort === "ran") return -(Date.parse(j.state?.last_run_at || "") || 0);
+    if (sort === "never") return j.state?.last_run_at ? 1 : 0;
+    return 0;
+  };
+  const ordered = [...visible].sort((a, b) => {
+    if (sort === "name") return a.name.localeCompare(b.name, "zh-Hans-CN");
+    const diff = sortValue(a) - sortValue(b);
+    return diff !== 0 ? diff : a.name.localeCompare(b.name, "zh-Hans-CN");
+  });
+
   const groups = new Map<string, JobSummary[]>();
-  for (const j of jobs) {
+  for (const j of ordered) {
     const cat = j.category || "(uncategorized)";
     if (!groups.has(cat)) groups.set(cat, []);
     groups.get(cat)!.push(j);
   }
 
+  // Category is the outer grouping; the text search now also covers
+  // description and keywords, so matching happens above, not here.
   const filtered = new Map<string, JobSummary[]>();
   for (const [cat, items] of groups) {
     if (categoryFilter && cat !== categoryFilter) continue;
-    const match = items.filter(
-      (j) => !filter || j.name.toLowerCase().includes(filter.toLowerCase())
-    );
-    if (match.length) filtered.set(cat, match);
+    if (items.length) filtered.set(cat, items);
   }
+  const visibleCount = [...filtered.values()].reduce((n, items) => n + items.length, 0);
 
   return (
     <div className="space-y-4">
@@ -172,6 +224,54 @@ export function JobsListPage() {
             + 新建
           </button>
         )}
+      </div>
+
+      {/* Status / time / sort: find the job you just made */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {([["all", "全部"], ["enabled", "启用"], ["disabled", "停用"], ["running", "运行中"]] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => setStatusFilter(key)}
+            className={cn("badge border cursor-pointer hover:bg-bg-hover",
+              statusFilter === key ? "bg-accent text-white border-accent" : "bg-bg-card border-border")}
+          >
+            {label}
+          </button>
+        ))}
+        <span className="text-border px-1">|</span>
+        <select
+          className="input text-xs py-1 w-auto"
+          value={range}
+          aria-label="按最后修改时间筛选"
+          onChange={(e) => setRange(e.target.value as typeof range)}
+        >
+          <option value="all">全部时间</option>
+          <option value="today">今天修改</option>
+          <option value="7d">近 7 天修改</option>
+          <option value="30d">近 30 天修改</option>
+        </select>
+        <select
+          className="input text-xs py-1 w-auto"
+          value={sort}
+          aria-label="排序方式"
+          onChange={(e) => setSort(e.target.value as typeof sort)}
+        >
+          <option value="modified">最近修改</option>
+          <option value="ran">最近运行</option>
+          <option value="never">从未运行优先</option>
+          <option value="name">名称 A→Z</option>
+        </select>
+        {(statusFilter !== "all" || range !== "all" || filter) && (
+          <button
+            onClick={() => { setStatusFilter("all"); setRange("all"); setFilter(""); }}
+            className="chip border border-border text-text-muted"
+          >
+            清除筛选
+          </button>
+        )}
+        <span className="ml-auto text-xs text-text-muted tabular-nums">
+          {visibleCount} / {jobs.length}
+        </span>
       </div>
 
       {/* Category filter */}
@@ -353,7 +453,11 @@ export function JobsListPage() {
                   <Link
                     key={j.name}
                     to={`/jobs/${encodeURIComponent(j.name)}`}
-                    className="flex items-center gap-3 px-4 py-2.5 hover:bg-bg-hover transition text-sm"
+                    data-job={j.name}
+                    className={cn(
+                      "flex items-center gap-3 px-4 py-2.5 hover:bg-bg-hover transition text-sm",
+                      highlight === j.name && "bg-accent/15 ring-1 ring-inset ring-accent/50",
+                    )}
                   >
                     <div
                       className={cn(

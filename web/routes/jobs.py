@@ -61,6 +61,7 @@ def _summary(job: dict) -> JobSummary:
         output_template=job.get("output", ""),
         state=_state_for(name),
         is_running=_registry.is_running(name),
+        file_mtime=job.get("_mtime") or None,
     )
 
 

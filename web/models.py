@@ -61,6 +61,9 @@ class JobSummary(BaseModel):
     output_template: str = ""
     state: Optional[JobState] = None
     is_running: bool = False
+    # When the YAML was last written: the only honest "when was this created or
+    # changed" signal, since jobs carry no created_at.
+    file_mtime: Optional[float] = None
 
 
 class JobDetail(JobSummary):

@@ -38,6 +38,8 @@ export interface JobSummary {
   output_template: string;
   state: JobState | null;
   is_running: boolean;
+  /** Epoch seconds of the YAML file's last write. */
+  file_mtime?: number | null;
 }
 
 export interface JobDetail extends JobSummary {
