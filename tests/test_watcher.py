@@ -317,3 +317,43 @@ def test_heartbeat_records_indexed_updates(tmp_path):
     finally:
         stop.set()
         thread.join(timeout=5)
+
+
+def test_reconcile_runs_without_file_events(tmp_path, monkeypatch):
+    """The self-heal must not depend on activity.
+
+    Deleting a report produces exactly one delete event; if the periodic
+    reconcile only ran when some later event arrived, the orphan row would
+    survive for as long as the output directory stayed quiet.
+    """
+    from web.indexer import db as index_db
+    from web.indexer import vector_sync
+
+    state = tmp_path / "state"
+    state.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "quiet.md").write_text("# quiet\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(index_db, "prune_missing", lambda d: calls.append(d) or 0)
+    monkeypatch.setattr(vector_sync, "prune_orphans", lambda d: None)
+
+    stop = threading.Event()
+    thread = watcher.start_watcher(str(output), state_dir=str(state),
+                                   stop_event=stop, reconcile_seconds=1)
+    try:
+        deadline = time.time() + 12
+        while time.time() < deadline and len(calls) < 2:
+            time.sleep(0.2)
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+    assert len(calls) >= 2, (
+        "reconcile did not run on a timer in a quiet directory "
+        f"(calls={len(calls)})"
+    )
+    beat = watcher.read_heartbeat(str(state)) or {}
+    assert beat.get("reconciles", 0) >= 1
+    assert beat.get("last_reconcile_at")

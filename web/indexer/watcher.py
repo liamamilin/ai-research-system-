@@ -169,12 +169,18 @@ def start_watcher(
 
         beat()
         try:
+            # yield_on_timeout wakes the loop on a timer even when nothing
+            # changes. Without it the periodic reconcile below only runs after
+            # a file event — and a deleted report produces no further events,
+            # which is exactly when the self-heal matters most.
             for changes in watch(
                 output_dir,
                 watch_filter=None,
                 recursive=True,
                 poll_delay_ms=poll_delay_ms,
                 stop_event=stop_event,
+                yield_on_timeout=True,
+                rust_timeout=1000,
             ):
                 indexed_any = False
                 for change_type, change_path in changes:
