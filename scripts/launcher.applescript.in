@@ -1,4 +1,4 @@
--- AI Research Console launcher (macOS applet) — TEMPLATE
+-- AREC launcher (macOS applet) — TEMPLATE
 --
 -- This file is a template: scripts/build_launcher.sh replaces the @...@
 -- placeholders with the paths of the machine that builds it, then runs
@@ -91,7 +91,7 @@ on startServer()
 		do shell script quoted form of startScript
 		return true
 	on error errMsg
-		postNotification("服务启动失败: " & errMsg)
+		postNotification("AREC 服务启动失败: " & errMsg)
 		return false
 	end try
 end startServer
@@ -115,14 +115,14 @@ on postNotification(messageText)
 	-- (or when permission is denied) this throws, and it must never interrupt
 	-- the recovery flow it is reporting about.
 	try
-		display notification messageText with title "AI Research Console"
+		display notification messageText with title "AREC"
 	on error errText
 		set ignored to errText
 	end try
 end postNotification
 
 on notifyTimeout()
-	postNotification("服务 30 分钟无响应，应用将关闭")
+	postNotification("AREC：服务 30 分钟无响应，应用将关闭")
 end notifyTimeout
 
 on run

@@ -150,3 +150,22 @@ def _wait_for(predicate, timeout: float = 30) -> bool:
             return True
         time.sleep(0.5)
     return False
+
+
+def test_app_bundle_name_is_consistent():
+    """The bundle name, the builder and the docs must agree.
+
+    A rename that only touches the filesystem leaves build_launcher.sh writing
+    the old name again, so the next rebuild silently resurrects it.
+    """
+    builder = BUILD.read_text(encoding="utf-8")
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    match = re.search(r'APP_NAME="([^"]+)"', builder)
+    assert match, "build_launcher.sh does not define APP_NAME"
+    app_name = match.group(1)
+    assert app_name == "AREC.app", f"unexpected app bundle name: {app_name}"
+    assert f"`{app_name}`" in readme, f"README does not mention {app_name}"
+    assert "AI Research Console.app" not in readme, \
+        "README still points at the old bundle name"
+    # Notifications are how the launcher talks when something fails.
+    assert 'with title "AREC"' in _template_text()

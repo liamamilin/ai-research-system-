@@ -14,7 +14,7 @@ BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE="$BASE_DIR/scripts/launcher.applescript.in"
 RENDERED="$BASE_DIR/scripts/.launcher.rendered.applescript"
 STARTER_TEMPLATE="$BASE_DIR/scripts/start_server_detached.sh"
-APP_NAME="AI Research Console.app"
+APP_NAME="AREC.app"
 DEST_DIR="${1:-$BASE_DIR}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

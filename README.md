@@ -134,7 +134,7 @@ python scripts/export_round_artifacts.py --all        # every round
 
 ### macOS 启动器 App
 
-双击项目根目录的 `AI Research Console.app`：
+双击项目根目录的 `AREC.app`：
 
 - 服务未启动 → 自动启动服务（约 5–25 秒，取决于机器）并打开浏览器
 - 服务已在运行 → 直接跳转，不重启服务
