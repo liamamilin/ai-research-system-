@@ -147,7 +147,7 @@ export function AskPage() {
                 <span>· {result.usage.total_tokens} tokens</span>
               ) : null}
             </div>
-            <div className="prose prose-invert max-w-none text-sm leading-relaxed">
+            <div className="md-body">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.answer}</ReactMarkdown>
             </div>
           </div>

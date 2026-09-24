@@ -353,7 +353,7 @@ export function ReportViewPage() {
 
         {/* Markdown content */}
         <div className="card p-4 md:p-6 overflow-x-auto flex-1 min-w-0">
-          <div className="prose prose-invert max-w-none text-sm leading-relaxed">
+          <div className="md-body md-body-wide">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{

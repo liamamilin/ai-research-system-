@@ -36,3 +36,82 @@
     @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
   }
 }
+/* ----- rendered markdown -------------------------------------------------
+   The pages used Tailwind's `prose` classes, but @tailwindcss/typography was
+   never installed, so every one of them was a no-op: headings at body size,
+   lists without markers, inline code without a background. Scoped to .md-body
+   so it cannot leak into the UI chrome. */
+.md-body {
+  @apply text-sm leading-relaxed text-text;
+  line-height: 1.75;
+  max-width: 74ch;      /* long lines are hard to track back */
+  overflow-wrap: anywhere;
+}
+
+.md-body > * + * { margin-top: 0.85em; }
+
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  @apply font-semibold text-text;
+  line-height: 1.35;
+  scroll-margin-top: 4rem;
+}
+.md-body h1 { @apply text-xl; margin-bottom: 0.6em; }
+.md-body h2 {
+  @apply text-lg;
+  margin-top: 1.6em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid #262b33;
+}
+.md-body h3 { @apply text-base; margin-top: 1.4em; }
+.md-body h4 { @apply text-sm text-text-muted; margin-top: 1.2em; }
+.md-body h1 + *, .md-body h2 + *, .md-body h3 + * { margin-top: 0.5em; }
+
+.md-body p { @apply text-text; }
+.md-body strong { @apply font-semibold text-text; }
+.md-body a { @apply text-accent underline underline-offset-2; }
+.md-body a:hover { @apply opacity-80; }
+.md-body hr { @apply border-t border-border; margin: 1.6em 0; }
+
+/* Preflight removes list markers; without this the answer reads as a wall. */
+.md-body ul, .md-body ol { @apply pl-5; margin-top: 0.6em; }
+.md-body ul { list-style: disc outside; }
+.md-body ol { list-style: decimal outside; }
+.md-body li { @apply text-text; }
+.md-body li + li { margin-top: 0.35em; }
+.md-body li > ul, .md-body li > ol { margin-top: 0.35em; }
+.md-body li > p { margin: 0 0 0.35em; }
+.md-body li::marker { @apply text-text-muted; }
+.md-body input[type="checkbox"] { @apply mr-1.5 align-middle; }
+
+.md-body blockquote {
+  @apply border-l-2 border-accent/60 bg-bg-hover/40 text-text-muted;
+  padding: 0.5em 0 0.5em 0.9em;
+  margin: 0.9em 0;
+  border-radius: 0 4px 4px 0;
+}
+.md-body blockquote p + p { margin-top: 0.6em; }
+
+.md-body code {
+  @apply font-mono bg-bg-hover border border-border/60 rounded px-1 py-0.5;
+  font-size: 0.86em;
+}
+.md-body pre {
+  @apply bg-bg-hover border border-border rounded-md p-3;
+  overflow-x: auto;
+  font-size: 0.85em;
+  line-height: 1.6;
+}
+.md-body pre code { @apply bg-transparent border-0 p-0; font-size: 1em; }
+
+.md-body table {
+  @apply w-full border-collapse text-xs;
+  margin-top: 0.9em;
+  display: block;
+  overflow-x: auto;      /* wide tables scroll instead of stretching the line */
+}
+.md-body th, .md-body td { @apply border border-border px-2 py-1.5 text-left align-top; }
+.md-body th { @apply bg-bg-hover font-medium text-text; }
+.md-body img { @apply max-w-full rounded-md; }
+
+/* Report bodies are documents, not chat: they may use the full width. */
+.md-body-wide { max-width: none; }

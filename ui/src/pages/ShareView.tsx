@@ -54,7 +54,7 @@ export function ShareViewPage() {
               </div>
             </div>
             <div className="card p-4 md:p-6 overflow-x-auto">
-              <div className="prose prose-invert max-w-none text-sm leading-relaxed">
+              <div className="md-body md-body-wide">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.content}</ReactMarkdown>
               </div>
             </div>
