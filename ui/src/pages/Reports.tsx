@@ -153,6 +153,47 @@ export function ReportsPage() {
   const [scope, setScope] = useState<"all" | "fav" | "unread">("all");
   const [tag, setTag] = useState("");
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
+  // Time filters key on the report's own date (from its path), not the file
+  // mtime: a backfill run would otherwise make June look like today.
+  const [range, setRange] = useState("all");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [latestOnly, setLatestOnly] = useState(false);
+  const [sort, setSort] = useState<"recent" | "oldest" | "title" | "size" | "coverage">("recent");
+  const [showCustom, setShowCustom] = useState(false);
+
+  const dateBounds = useCallback((): { since?: string; until?: string } => {
+    if (customFrom || customTo) return { since: customFrom || undefined, until: customTo || undefined };
+    if (range === "all") return {};
+    const today = new Date();
+    const shift = (days: number) => {
+      const d = new Date(today);
+      d.setDate(d.getDate() - days);
+      return d.toISOString().slice(0, 10);
+    };
+    if (range === "today") return { since: today.toISOString().slice(0, 10) };
+    if (range === "yesterday") {
+      const y = new Date(today); y.setDate(y.getDate() - 1);
+      return { since: y.toISOString().slice(0, 10), until: y.toISOString().slice(0, 10) };
+    }
+    if (range === "3d") return { since: shift(2) };
+    if (range === "7d") return { since: shift(6) };
+    if (range === "30d") return { since: shift(29) };
+    if (range === "month") {
+      const first = new Date(today.getFullYear(), today.getMonth(), 1);
+      return { since: first.toISOString().slice(0, 10) };
+    }
+    return {};
+  }, [range, customFrom, customTo]);
+
+  const activeFilterParams = useCallback(() => ({
+    category: category || undefined,
+    favorite: scope === "fav" ? true : undefined,
+    unread: scope === "unread" ? true : undefined,
+    tag: tag || undefined,
+    latest_round: latestOnly || undefined,
+    ...dateBounds(),
+  }), [category, scope, tag, latestOnly, dateBounds]);
 
   const fetchReports = useCallback(async (
     pageNum: number,
@@ -164,13 +205,17 @@ export function ReportsPage() {
     const activeTag = tagArg ?? tag;
     setLoading(true);
     try {
+      // cat/activeScope/activeTag are the explicit call arguments (used when a
+      // filter change only refetches); everything else is current UI state.
       const data = await listReports({
+        ...activeFilterParams(),
         page: pageNum,
         per_page: 20,
-        category: cat || undefined,
+        category: cat || category || undefined,
         favorite: activeScope === "fav" ? true : undefined,
         unread: activeScope === "unread" ? true : undefined,
         tag: activeTag || undefined,
+        sort,
       });
       setReports(data.items);
       setTotal(data.total);
@@ -182,12 +227,12 @@ export function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [scope, tag]);
+  }, [scope, tag, sort, category, activeFilterParams]);
 
   const fetchTree = useCallback(async () => {
     try {
       const [treeData, cats, tagData] = await Promise.all([
-        getReportTree(),
+        getReportTree(activeFilterParams()),
         getReportCategories(),
         listTags().catch(() => ({ tags: [] })),
       ]);
@@ -200,7 +245,14 @@ export function ReportsPage() {
       setTree([]);
       setCategories([]);
     }
-  }, []);
+  }, [activeFilterParams]);
+
+  const applyTimeFilter = (next: string) => {
+    setRange(next);
+    setShowCustom(next === "custom");
+    if (next !== "custom") { setCustomFrom(""); setCustomTo(""); }
+    setPage(1);
+  };
 
   const handleScope = (next: "all" | "fav" | "unread") => {
     setScope(next);
@@ -337,6 +389,77 @@ export function ReportsPage() {
                   {label}
                 </button>
               ))}
+
+              {/* Time / round / sort: the answer to "what is new" without
+                  scrolling a 300-row list. */}
+              <span className="text-border px-1">|</span>
+              <select
+                className="input text-xs py-1 w-auto"
+                value={showCustom ? "custom" : range}
+                aria-label="按时间筛选"
+                onChange={(e) => applyTimeFilter(e.target.value)}
+              >
+                <option value="all">全部时间</option>
+                <option value="today">今天</option>
+                <option value="yesterday">昨天</option>
+                <option value="3d">近 3 天</option>
+                <option value="7d">近 7 天</option>
+                <option value="30d">近 30 天</option>
+                <option value="month">本月</option>
+                <option value="custom">自定义区间…</option>
+              </select>
+
+              <button
+                onClick={() => { setLatestOnly(!latestOnly); setPage(1); }}
+                className={cn("badge border cursor-pointer hover:bg-bg-hover",
+                  latestOnly ? "bg-accent text-white border-accent" : "bg-bg-card border-border")}
+                title="只看最新一轮流水线的产出"
+              >
+                最新一轮
+              </button>
+
+              <select
+                className="input text-xs py-1 w-auto"
+                value={sort}
+                aria-label="排序方式"
+                onChange={(e) => { setSort(e.target.value as typeof sort); setPage(1); }}
+              >
+                <option value="recent">最新优先</option>
+                <option value="oldest">最早优先</option>
+                <option value="coverage">引用覆盖率 高→低</option>
+                <option value="title">标题 A→Z</option>
+                <option value="size">体积 最大→小</option>
+              </select>
+
+              {(range !== "all" || customFrom || customTo || latestOnly) && (
+                <button
+                  onClick={() => { applyTimeFilter("all"); setLatestOnly(false); }}
+                  className="chip border border-border text-text-muted"
+                >
+                  清除筛选
+                </button>
+              )}
+
+              {showCustom && (
+                <span className="flex items-center gap-1.5 text-xs text-text-muted">
+                  <input
+                    type="date"
+                    className="input text-xs py-1 w-auto"
+                    value={customFrom}
+                    aria-label="起始日期"
+                    onChange={(e) => { setCustomFrom(e.target.value); setPage(1); }}
+                  />
+                  <span>→</span>
+                  <input
+                    type="date"
+                    className="input text-xs py-1 w-auto"
+                    value={customTo}
+                    aria-label="结束日期"
+                    onChange={(e) => { setCustomTo(e.target.value); setPage(1); }}
+                  />
+                </span>
+              )}
+
               {tags.length > 0 && <span className="text-border px-1">|</span>}
               {tags.slice(0, 12).map((t) => (
                 <button
@@ -534,6 +657,11 @@ function TreeEntry({
         >
           <span className="text-text-muted">{open ? "▾" : "▸"}</span>
           <span className="truncate">{entry.name}</span>
+          {entry.count != null && (
+            <span className="ml-auto text-[10px] text-text-muted/70 tabular-nums">
+              {entry.count}
+            </span>
+          )}
         </button>
         {open && entry.children?.map((child: any) => (
           <TreeEntry

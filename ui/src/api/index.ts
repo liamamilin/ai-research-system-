@@ -199,7 +199,7 @@ export async function getJobHistory(name: string, limit = 50): Promise<any[]> {
 
 // --- Reports ---
 
-export async function listReports(params?: {
+export interface ReportFilterParams {
   page?: number;
   per_page?: number;
   category?: string;
@@ -207,7 +207,15 @@ export async function listReports(params?: {
   favorite?: boolean;
   tag?: string;
   unread?: boolean;
-}): Promise<{ items: any[]; total: number; page: number; pages: number }> {
+  /** Report date (from the path) bounds, YYYY-MM-DD. */
+  since?: string;
+  until?: string;
+  /** Only the newest pipeline round. */
+  latest_round?: boolean;
+  sort?: "recent" | "oldest" | "title" | "size" | "coverage";
+}
+
+export async function listReports(params?: ReportFilterParams): Promise<{ items: any[]; total: number; page: number; pages: number }> {
   return api("/api/reports", { query: params as any });
 }
 
@@ -295,8 +303,19 @@ export async function getSharedReport(token: string): Promise<SharedReport> {
   return api(`/api/share/${encodeURIComponent(token)}`);
 }
 
-export async function getReportTree(): Promise<any[]> {
-  return api("/api/reports/tree");
+type TreeQuery = {
+  category?: string;
+  job?: string;
+  favorite?: boolean;
+  tag?: string;
+  unread?: boolean;
+  since?: string;
+  until?: string;
+  latest_round?: boolean;
+};
+
+export async function getReportTree(params?: TreeQuery): Promise<any[]> {
+  return api("/api/reports/tree", { query: params as any });
 }
 
 export async function getReportRaw(path: string): Promise<{ path: string; content: string; size: number }> {

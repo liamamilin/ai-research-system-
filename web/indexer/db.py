@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
+import time
 import threading
 from contextlib import contextmanager
 from typing import Iterator, Optional
@@ -53,6 +55,9 @@ _EXTRA_COLUMNS = (
     ("read_at", "REAL"),
     ("rating", "INTEGER NOT NULL DEFAULT 0"),
     ("rating_note", "TEXT NOT NULL DEFAULT ''"),
+    # The report's own date, not the file's mtime: a backfill run rewrites
+    # mtime for old reports, which would make June look like today.
+    ("report_date", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -61,6 +66,32 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
     for name, ddl in _EXTRA_COLUMNS:
         if name not in existing:
             conn.execute(f"ALTER TABLE reports ADD COLUMN {name} {ddl}")
+    # Backfill rows written before the column existed (or before this run added
+    # it — `existing` was read before the ALTERs above).
+    stale = conn.execute(
+        "SELECT path, mtime FROM reports WHERE report_date = ''").fetchall()
+    for row in stale:
+        conn.execute("UPDATE reports SET report_date = ? WHERE path = ?",
+                     (report_date_for(row["path"], row["mtime"]), row["path"]))
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_date ON reports(report_date)")
+
+
+_DATE_IN_PATH_RE = re.compile(r"(20\d{2}-\d{2}-\d{2})")
+
+
+def report_date_for(path: str, mtime: float = 0.0) -> str:
+    """The report's own date: the one in its path, else its mtime's date.
+
+    Pipeline output encodes the round date in the path; older ad-hoc reports do
+    not, so they fall back to the file date. Comparing dates as strings is safe
+    for ISO format and keeps the filter a plain indexed range scan.
+    """
+    match = _DATE_IN_PATH_RE.search(path or "")
+    if match:
+        return match.group(1)
+    if mtime:
+        return time.strftime("%Y-%m-%d", time.localtime(mtime))
+    return ""
 
 
 def init_db():
@@ -140,17 +171,20 @@ def upsert_report(
 
         conn.execute(
             """
-            INSERT INTO reports (path, job_name, size_bytes, mtime, title, category, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO reports (path, job_name, size_bytes, mtime, title, category,
+                                 indexed_at, report_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(path) DO UPDATE SET
                 mtime=excluded.mtime,
                 size_bytes=excluded.size_bytes,
                 job_name=excluded.job_name,
                 title=excluded.title,
                 category=excluded.category,
-                indexed_at=excluded.indexed_at
+                indexed_at=excluded.indexed_at,
+                report_date=excluded.report_date
             """,
-            (path, job_name, size_bytes, mtime, title, category, now),
+            (path, job_name, size_bytes, mtime, title, category, now,
+             report_date_for(path, mtime)),
         )
 
         # Get (or re-get) rowid for FTS sync
@@ -372,6 +406,96 @@ def list_tags() -> list[dict]:
             for tag, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
 
 
+SORT_ORDERS = {
+    "recent": "report_date DESC, mtime DESC",
+    "oldest": "report_date ASC, mtime ASC",
+    "title": "title COLLATE NOCASE ASC",
+    "size": "size_bytes DESC",
+    # Citation coverage lives in the per-report meta sidecar, not in this table;
+    # the route sorts those in Python after fetching.
+    "coverage": "report_date DESC, mtime DESC",
+}
+
+
+def _filter_clause(
+    category: str | None = None,
+    job_name: str | None = None,
+    favorite: bool | None = None,
+    tag: str | None = None,
+    unread: bool | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    latest_round: bool = False,
+) -> tuple[list[str], list]:
+    """Shared WHERE fragments for the list and the tree, so they cannot drift."""
+    where_parts: list[str] = []
+    params: list = []
+
+    if category:
+        where_parts.append("category = ?")
+        params.append(category)
+    if job_name:
+        where_parts.append("job_name = ?")
+        params.append(job_name)
+    if favorite is not None:
+        where_parts.append("favorite = ?")
+        params.append(1 if favorite else 0)
+    if tag:
+        where_parts.append("tags LIKE ?")
+        params.append(f"%{json.dumps(tag, ensure_ascii=False)}%")
+    if unread is not None:
+        where_parts.append("read_at IS " + ("NULL" if unread else "NOT NULL"))
+    if since:
+        where_parts.append("report_date >= ?")
+        params.append(since)
+    if until:
+        where_parts.append("report_date <= ?")
+        params.append(until)
+    if latest_round:
+        round_prefix = latest_round_prefix()
+        if round_prefix:
+            # Date alone would also pull in unrelated reports written the same
+            # day; a round is one directory's output.
+            where_parts.append("report_date = ? AND path LIKE ?")
+            params.extend([latest_round_date(), round_prefix + "%"])
+    return where_parts, params
+
+
+def latest_round_prefix() -> str:
+    """Directory of the newest pipeline round, e.g. practical_ai_intelligence/2026-09-24/."""
+    date = latest_round_date()
+    if not date:
+        return ""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT path FROM reports WHERE report_date = ? AND path GLOB '*/09_*'"
+            " ORDER BY path LIMIT 1", (date,)).fetchone()
+    if not row:
+        return ""
+    return row["path"].rsplit("/", 1)[0] + "/"
+
+
+def latest_round_date() -> str:
+    """The newest report date, preferring a real pipeline round.
+
+    A round is a date whose reports include a 09_* synthesis file; a day with a
+    single ad-hoc report is not something to call "the latest round".
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT report_date FROM reports WHERE report_date != ''"
+            " ORDER BY report_date DESC").fetchall()
+        for candidate in [r["report_date"] for r in row][:14]:
+            # GLOB, not LIKE: SQLite's LIKE has no [...] character class, so
+            # the usual "[_]" trick matches nothing at all.
+            has_synthesis = conn.execute(
+                "SELECT 1 FROM reports WHERE report_date = ? AND path GLOB '*/09_*'"
+                " LIMIT 1", (candidate,)).fetchone()
+            if has_synthesis:
+                return candidate
+        return row[0]["report_date"] if row else ""
+
+
 def list_reports(
     page: int = 1,
     per_page: int = 20,
@@ -380,10 +504,14 @@ def list_reports(
     favorite: bool | None = None,
     tag: str | None = None,
     unread: bool | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    latest_round: bool = False,
+    sort: str = "recent",
 ) -> dict:
     """Paginated list of reports with optional filters."""
-    where_parts: list[str] = []
-    params: list = []
+    where_parts, params = _filter_clause(
+        category, job_name, favorite, tag, unread, since, until, latest_round)
 
     if category:
         where_parts.append("category = ?")
@@ -404,6 +532,7 @@ def list_reports(
     if where_parts:
         where = " WHERE " + " AND ".join(where_parts)
 
+    order = SORT_ORDERS.get(sort, SORT_ORDERS["recent"])
     with connect() as conn:
         count_row = conn.execute(
             f"SELECT COUNT(*) AS cnt FROM reports{where}", params
@@ -412,7 +541,7 @@ def list_reports(
 
         offset = (page - 1) * per_page
         rows = conn.execute(
-            f"SELECT * FROM reports{where} ORDER BY mtime DESC LIMIT ? OFFSET ?",
+            f"SELECT * FROM reports{where} ORDER BY {order} LIMIT ? OFFSET ?",
             params + [per_page, offset],
         ).fetchall()
 
@@ -434,11 +563,30 @@ def list_categories() -> list[str]:
         return [r["category"] for r in rows]
 
 
-def get_report_tree() -> list[dict]:
-    """Return a nested directory tree structure of output/. Each leaf has path + title."""
+def get_report_tree(
+    category: str | None = None,
+    job_name: str | None = None,
+    favorite: bool | None = None,
+    tag: str | None = None,
+    unread: bool | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    latest_round: bool = False,
+) -> list[dict]:
+    """Nested directory tree, filtered and pruned to the reports that matched.
+
+    The tree has to follow the same filters as the list: showing a tree that
+    still lists every directory next to a 24-report list would claim 300 when
+    there are 24. Directories carry a count so the tree also answers "how much
+    is in here".
+    """
+    where_parts, params = _filter_clause(
+        category, job_name, favorite, tag, unread, since, until, latest_round)
+    where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
     with connect() as conn:
         rows = conn.execute(
-            "SELECT path, title, category, size_bytes, mtime FROM reports ORDER BY path"
+            f"SELECT path, title, category, size_bytes, mtime FROM reports{where}"
+            f" ORDER BY path", params,
         ).fetchall()
 
     tree: dict[str, dict] = {}
@@ -464,7 +612,11 @@ def get_report_tree() -> list[dict]:
         for key, val in sorted(d.items(), key=lambda x: (0 if x[1].get("type") == "dir" else 1, x[0])):
             if val["type"] == "dir":
                 children = _to_list(val["children"])
-                entry: dict = {"name": key, "type": "dir", "children": children}
+                count = sum(c.get("count", 1) for c in children)
+                if not children:
+                    return []  # nothing matched inside: do not show the branch
+                entry: dict = {"name": key, "type": "dir", "children": children,
+                               "count": count}
                 if children:
                     latest = max(children, key=lambda c: c.get("mtime", 0) if c.get("type") == "file" else 0)
                     if latest.get("mtime"):

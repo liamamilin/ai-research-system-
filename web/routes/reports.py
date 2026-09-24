@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import os
 from typing import Optional
 
@@ -65,8 +67,24 @@ def categories(user=Depends(require_viewer)):
 
 
 @router.get("/tree")
-def tree(user=Depends(require_viewer)):
-    return index_db.get_report_tree()
+def tree(
+    category: str | None = None,
+    job: str | None = None,
+    favorite: bool | None = None,
+    tag: str | None = None,
+    unread: bool | None = None,
+    since: str | None = Query(None, description="报告日期起（YYYY-MM-DD）"),
+    until: str | None = Query(None, description="报告日期止（YYYY-MM-DD）"),
+    latest_round: bool = Query(False, description="只看最新一轮"),
+    user=Depends(require_viewer),
+):
+    """The same filters as the list: the tree must not claim reports the list hides."""
+    filters = ReportFilters(
+        category=category, job=job, favorite=favorite, tag=tag, unread=unread,
+        since=_validate_date(since, "since"), until=_validate_date(until, "until"),
+        latest_round=latest_round,
+    )
+    return index_db.get_report_tree(**filters.as_kwargs())
 
 
 @router.get("/tags")
@@ -149,6 +167,51 @@ def update_meta(payload: dict, request: Request, user=Depends(require_editor)):
     return updated
 
 
+class ReportFilters:
+    """Filters shared by the list and the tree so the two can never disagree."""
+
+    def __init__(
+        self,
+        category: str | None = None,
+        job: str | None = None,
+        favorite: bool | None = None,
+        tag: str | None = None,
+        unread: bool | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        latest_round: bool = False,
+    ):
+        self.category = category
+        self.job = job
+        self.favorite = favorite
+        self.tag = tag
+        self.unread = unread
+        self.since = since
+        self.until = until
+        self.latest_round = latest_round
+
+    def as_kwargs(self) -> dict:
+        return {
+            "category": self.category, "job_name": self.job,
+            "favorite": self.favorite, "tag": self.tag, "unread": self.unread,
+            "since": self.since, "until": self.until,
+            "latest_round": self.latest_round,
+        }
+
+
+def _validate_date(value: str | None, field: str) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value.strip(), "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ApiError.make("invalid_date", f"{field} 必须是 YYYY-MM-DD 格式"),
+        )
+    return parsed.strftime("%Y-%m-%d")
+
+
 @router.get("")
 def list_reports(
     page: int = Query(1, ge=1),
@@ -158,18 +221,44 @@ def list_reports(
     favorite: bool | None = None,
     tag: str | None = None,
     unread: bool | None = None,
+    since: str | None = Query(None, description="报告日期起（YYYY-MM-DD）"),
+    until: str | None = Query(None, description="报告日期止（YYYY-MM-DD）"),
+    latest_round: bool = Query(False, description="只看最新一轮"),
+    sort: str = Query("recent", pattern="^(recent|oldest|title|size|coverage)$"),
     user=Depends(require_viewer),
 ):
-    data = index_db.list_reports(
-        page=page,
-        per_page=per_page,
-        category=category,
-        job_name=job,
-        favorite=favorite,
-        tag=tag,
-        unread=unread,
+    filters = ReportFilters(
+        category=category, job=job, favorite=favorite, tag=tag, unread=unread,
+        since=_validate_date(since, "since"), until=_validate_date(until, "until"),
+        latest_round=latest_round,
     )
     meta_map = report_meta.load_all()
+
+    if sort == "coverage":
+        # Coverage lives in the meta sidecar, not in the index, so this one
+        # order is applied after fetching. The result set is capped to keep the
+        # sort honest on a large library.
+        data = index_db.list_reports(page=1, per_page=2000, sort="recent",
+                                    **filters.as_kwargs())
+        def coverage_of(item: dict) -> float:
+            meta = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
+            summary = _quality_summary(meta) or {}
+            value = summary.get("coverage")
+            return float(value) if isinstance(value, (int, float)) else -1.0
+        items = sorted(data["items"], key=coverage_of, reverse=True)
+        total = len(items)
+        start = (page - 1) * per_page
+        data = {
+            "items": items[start:start + per_page],
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page if total else 1,
+        }
+    else:
+        data = index_db.list_reports(page=page, per_page=per_page, sort=sort,
+                                    **filters.as_kwargs())
+
     for item in data.get("items", []):
         meta = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
         item["meta"] = meta
