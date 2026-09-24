@@ -415,6 +415,24 @@ export function ReportsPage() {
                             {item.meta.searches ? ` · ${item.meta.searches} 搜索` : ""}
                           </span>
                         )}
+                        {item.quality && item.quality.total > 0 && (
+                          <span
+                            className={cn(
+                              "badge border text-[10px]",
+                              item.quality.unmatched === 0
+                                ? "bg-green-900/40 text-green-400 border-green-800"
+                                : item.quality.coverage >= 0.6
+                                  ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
+                                  : "bg-red-900/40 text-red-400 border-red-800"
+                            )}
+                            title={
+                              `引用溯源：${item.quality.matched}/${item.quality.total} 来自本次检索` +
+                              (item.quality.unmatched ? `，${item.quality.unmatched} 个未在检索结果中` : "")
+                            }
+                          >
+                            引用 {Math.round((item.quality.coverage ?? 0) * 100)}%
+                          </span>
+                        )}
                         {item.snippet && <Snippet html={String(item.snippet)} />}
                       </div>
                     </div>

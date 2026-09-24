@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -16,9 +17,46 @@ from web.settings import get_settings
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 
+def _quality_summary(meta: Optional[dict]) -> Optional[dict]:
+    """Compact citation-quality signal for list rows and dashboards."""
+    check = (meta or {}).get("citation_check") or {}
+    if not check or not check.get("total"):
+        return None
+    return {
+        "coverage": check.get("coverage"),
+        "matched": check.get("matched"),
+        "total": check.get("total"),
+        "unmatched": check.get("unmatched"),
+        "below_threshold": bool(check.get("below_threshold")),
+        "reachable": (check.get("reachability") or {}).get("reachable"),
+    }
+
+
 @router.get("/stats")
 def stats(user=Depends(require_viewer)):
-    return index_db.get_stats()
+    """Report counts plus citation-quality aggregates."""
+    result = index_db.get_stats()
+    meta_map = report_meta.load_all()
+    coverages: list[float] = []
+    unverified = 0
+    low_quality = 0
+    for meta in meta_map.values():
+        summary = _quality_summary(meta)
+        if not summary:
+            continue
+        if summary["coverage"] is not None:
+            coverages.append(summary["coverage"])
+        if summary["unmatched"]:
+            unverified += 1
+        if summary["below_threshold"]:
+            low_quality += 1
+    result["quality"] = {
+        "checked": len(coverages),
+        "avg_coverage": round(sum(coverages) / len(coverages), 4) if coverages else None,
+        "reports_with_unmatched": unverified,
+        "reports_below_threshold": low_quality,
+    }
+    return result
 
 
 @router.get("/categories")
@@ -133,7 +171,9 @@ def list_reports(
     )
     meta_map = report_meta.load_all()
     for item in data.get("items", []):
-        item["meta"] = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
+        meta = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
+        item["meta"] = meta
+        item["quality"] = _quality_summary(meta)
     return data
 
 
@@ -313,5 +353,7 @@ def search(
     results = index_db.search_reports(q.strip(), limit=limit)
     meta_map = report_meta.load_all()
     for item in results:
-        item["meta"] = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
+        meta = meta_map.get(report_meta.normalize_rel(item.get("path", "")))
+        item["meta"] = meta
+        item["quality"] = _quality_summary(meta)
     return {"results": results, "total": len(results)}

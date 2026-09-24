@@ -83,6 +83,8 @@ def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le
 
 @router.post("/reindex")
 def reindex_vectors(request: Request, limit: int = Query(200, ge=1, le=2000),
+                    purge: bool = Query(False, description="drop all vectors first (full rebuild)"),
+                    prune: bool = Query(True, description="drop vectors whose report no longer exists"),
                     user=Depends(require_editor)):
     """Embed reports that are missing/stale in the vector store."""
     sys_config = load_system_config(get_settings().paths.config_dir)
@@ -98,6 +100,14 @@ def reindex_vectors(request: Request, limit: int = Query(200, ge=1, le=2000),
 
     settings = get_settings()
     import os
+
+    from web.indexer import vector_sync
+
+    purged = None
+    if purge:
+        purged = vector_sync.purge_all()
+    pruned = vector_sync.prune_orphans(settings.paths.output_dir,
+                                        settings.paths.state_dir) if prune else None
 
     reports = index_db.list_reports(page=1, per_page=limit)["items"]
     embedded = skipped = failed = 0
@@ -128,4 +138,7 @@ def reindex_vectors(request: Request, limit: int = Query(200, ge=1, le=2000),
         ip=request.client.host if request.client else None,
     )
     return {"embedded": embedded, "skipped": skipped, "failed": failed,
+            "purged": purged,
+            "pruned": pruned,
+            "coverage": vector_sync.coverage(settings.paths.state_dir),
             "stats": vectors.index_stats()}

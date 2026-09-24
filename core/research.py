@@ -142,10 +142,19 @@ class ResearchAgent:
         self._progress = progress_cb or (lambda _: None)
         self._search_calls = 0
         self._tools_used = 0
+        # Every URL this run actually retrieved, for citation provenance checks.
+        self.retrieved_urls: set[str] = set()
         self._timeout_seconds = int(timeout_seconds or 0)
         self._deadline = (
             time.time() + self._timeout_seconds if self._timeout_seconds else 0.0
         )
+
+    def _remember(self, results) -> None:
+        """Record retrieved URLs so the report's citations can be verified."""
+        for item in results or []:
+            url = getattr(item, "url", "") or ""
+            if url:
+                self.retrieved_urls.add(url)
 
     # ------------------------------------------------------------------
     # Public API
@@ -293,6 +302,7 @@ class ResearchAgent:
         self._search_calls += 1
 
         results = self.search.search(queries, objective=objective)
+        self._remember(results)
         if not results:
             return (
                 "Error: web search returned no results. Try different queries."
@@ -362,6 +372,7 @@ class ResearchAgent:
         if queries:
             self._search_calls += 1
             results = self.search.search(queries, objective=objective)
+            self._remember(results)
 
         if results:
             sources = self._truncate(

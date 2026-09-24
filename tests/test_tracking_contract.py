@@ -280,7 +280,7 @@ def test_format_outcomes_respects_days_window(db):
     assert len(tracking.recent_outcomes(days=3650)) == 1
 
 
-def test_engine_prompt_injects_outcomes(db, monkeypatch):
+def test_engine_prompt_injects_outcomes(db, tmp_path, monkeypatch):
     from core.engine import ResearchEngine
 
     tracking.sync_round("2026-09-20", actions=[{"action": "建立成本日历"}])
@@ -288,6 +288,8 @@ def test_engine_prompt_injects_outcomes(db, monkeypatch):
 
     engine = ResearchEngine.__new__(ResearchEngine)
     engine._date_override = None
+    engine.sys = {}
+    engine.workspace_dir = str(tmp_path)
     prompt = engine._build_prompt({
         "name": "测试",
         "keywords": ["a"],
@@ -298,10 +300,12 @@ def test_engine_prompt_injects_outcomes(db, monkeypatch):
     assert "{" not in prompt
 
 
-def test_engine_prompt_without_outcomes_is_empty(db):
+def test_engine_prompt_without_outcomes_is_empty(db, tmp_path):
     from core.engine import ResearchEngine
 
     engine = ResearchEngine.__new__(ResearchEngine)
     engine._date_override = None
+    engine.sys = {}
+    engine.workspace_dir = str(tmp_path)
     prompt = engine._build_prompt({"name": "x", "prompt": "结果：{recent_outcomes}"})
     assert prompt.strip() == "结果："

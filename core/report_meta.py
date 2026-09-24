@@ -52,6 +52,7 @@ def append_record(
     job: str,
     usage: Optional[dict] = None,
     duration_seconds: Optional[float] = None,
+    extra: Optional[dict] = None,
 ) -> None:
     """Append a metadata record for a saved report (best-effort)."""
     usage = usage or {}
@@ -68,6 +69,8 @@ def append_record(
         "searches": usage.get("searches"),
         "duration_seconds": duration_seconds,
     }
+    if extra:
+        record.update({k: v for k, v in extra.items() if v is not None})
     match = _ROUND_DATE_RE.search(rel)
     if match:
         record["round_date"] = match.group(1)

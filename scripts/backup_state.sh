@@ -32,6 +32,7 @@ FILES=(
     "state/users.db"
     "state/reports.db"
     "state/tracking.db"
+    "state/events.db"
     "state/report_meta.jsonl"
     "state/pipeline_rounds.json"
     "config/system.yaml"

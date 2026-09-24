@@ -346,7 +346,7 @@ export function TemplateLibrary({ open, onClose, onUse }: Props) {
 
               <div>
                 <label className="block text-xs text-text-muted mb-0.5">
-                  Prompt 模板 * <span className="opacity-70">={"{name} {keywords} {date} {date_1d_ago} {date_7d_ago} {language} {recent_outcomes}"}</span>
+                  Prompt 模板 * <span className="opacity-70">={"{name} {keywords} {date} {date_1d_ago} {date_7d_ago} {language} {recent_outcomes} {reported_events}"}</span>
                 </label>
                 <textarea
                   className="input font-mono text-xs min-h-[240px] leading-relaxed"

@@ -17,6 +17,12 @@ def ensure_tracking_db() -> None:
     tracking.use_state_dir(get_settings().paths.state_dir)
 
 
+def ensure_events_db() -> None:
+    from core import events
+
+    events.use_state_dir(get_settings().paths.state_dir)
+
+
 @router.get("/actions")
 def list_actions(
     kind: str | None = Query(None, pattern="^(action|test|watch)$"),
@@ -29,6 +35,23 @@ def list_actions(
     return {
         "items": tracking.list_items(kind=kind, status=item_status, limit=limit),
         "carry_over": tracking.carry_over(),
+    }
+
+
+@router.get("/events")
+def list_events(
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(50, ge=1, le=500),
+    user=Depends(require_viewer),
+):
+    """Cross-round event memory: sources already reported, plus the prompt block."""
+    from core import events
+
+    ensure_events_db()
+    return {
+        "events": events.recent_events(days=days, limit=limit),
+        "prompt_block": events.reported_block(days=days, limit=min(limit, 20)),
+        "stats": events.stats(),
     }
 
 

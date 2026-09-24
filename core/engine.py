@@ -178,11 +178,15 @@ class ResearchEngine:
                 cleaned = extract_report(raw_content, self.sys,
                                          cancel_token=self._cancel)
                 actual_path = self._save_output(cleaned, output_path)
+
+                citation = self._check_citations(cleaned, agent)
+                self._register_events(job_name, actual_path, cleaned)
                 try:
                     from .report_meta import append_record
 
                     append_record(actual_path, job_name, usage=usage,
-                                  duration_seconds=round(time.time() - start_time, 1))
+                                  duration_seconds=round(time.time() - start_time, 1),
+                                  extra={"citation_check": citation})
                 except Exception as exc:  # noqa: BLE001 - metadata is optional
                     logger.debug("report metadata skipped: %s", exc)
                 logger.info(
@@ -330,6 +334,7 @@ class ResearchEngine:
             "time": now.strftime("%H-%M-%S"),
             "datetime": now.strftime("%Y-%m-%d_%H-%M-%S"),
             "recent_outcomes": self._outcomes_block(),
+            "reported_events": self._reported_events(),
         }
 
         # Simple {var} substitution
@@ -338,6 +343,24 @@ class ResearchEngine:
             result = result.replace("{" + key + "}", str(val))
 
         return result
+
+    def _reported_events(self) -> str:
+        """Sources already reported in recent rounds (suppress duplicates)."""
+        try:
+            sys_cfg = getattr(self, "sys", None) or {}
+            cfg = (sys_cfg.get("research") or {}).get("event_memory") or {}
+            if cfg.get("enabled", True) is False:
+                return ""
+            from . import events
+
+            events.use_state_dir(
+                os.path.join(getattr(self, "workspace_dir", "."), "state"))
+            return events.reported_block(
+                days=int(cfg.get("days", 7)),
+                limit=int(cfg.get("limit", 15)),
+            )
+        except Exception:  # noqa: BLE001 - never break a run over memory
+            return ""
 
     @staticmethod
     def _outcomes_block() -> str:
@@ -348,6 +371,71 @@ class ResearchEngine:
             return tracking.format_outcomes()
         except Exception:  # noqa: BLE001 - never break a run over tracking
             return ""
+
+    @staticmethod
+    def _round_date_from_path(path: str) -> Optional[str]:
+        """Round date encoded in an output path (…/practical_ai_intelligence/YYYY-MM-DD/…)."""
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", str(path or ""))
+        return m.group(1) if m else None
+
+    def _register_events(self, job_name: str, output_path: str, content: str) -> Optional[dict]:
+        """Record the report's sources in the cross-round event memory."""
+        try:
+            from . import events
+
+            events.use_state_dir(os.path.join(self.workspace_dir, "state"))
+            return events.register_report(
+                job_name, self._now().strftime("%Y-%m-%d"), content,
+                round_date=self._round_date_from_path(output_path),
+            )
+        except Exception as exc:  # noqa: BLE001 - bookkeeping must not break runs
+            logger.debug("event registration skipped: %s", exc)
+            return None
+
+    def _check_citations(self, content: str, agent) -> Optional[dict]:
+        """Verify the report's URLs against what this run actually retrieved.
+
+        Configured via ``research.citation_check`` in system.yaml; failures are
+        logged and recorded in report metadata, never fatal to the run.
+        """
+        cfg = (self.sys.get("research") or {}).get("citation_check") or {}
+        if cfg.get("enabled", True) is False:
+            return None
+        try:
+            from .provenance import check as provenance_check
+            from .provenance import summarize
+
+            result = provenance_check(
+                content,
+                getattr(agent, "retrieved_urls", ()) or (),
+                verify_unreachable=bool(cfg.get("verify_unreachable", False)),
+                max_checks=int(cfg.get("max_checks", 10)),
+                timeout=float(cfg.get("timeout", 5.0)),
+            )
+            line = summarize(result)
+            # Quality gate: flag reports whose citations are mostly untraceable.
+            min_coverage = cfg.get("min_coverage")
+            if min_coverage is not None and result.get("coverage") is not None:
+                result["below_threshold"] = result["coverage"] < float(min_coverage)
+                if result["below_threshold"]:
+                    line += f"（低于阈值 {float(min_coverage):.0%}，请人工复核）"
+            if result.get("unmatched"):
+                logger.warning("%s | 未匹配示例: %s", line,
+                               ", ".join(result["unmatched_examples"][:3]))
+                if self._progress:
+                    self._progress({"type": "log", "level": "warning",
+                                    "message": line})
+                    for url in result["unmatched_examples"][:3]:
+                        self._progress({"type": "log", "level": "warning",
+                                        "message": f"  未在检索结果中的引用: {url}"})
+            else:
+                logger.info("%s", line)
+                if self._progress:
+                    self._progress({"type": "log", "level": "info", "message": line})
+            return result
+        except Exception as exc:  # noqa: BLE001 - provenance must never break a run
+            logger.debug("citation check skipped: %s", exc)
+            return None
 
     # ------------------------------------------------------------------
     # Output path resolution

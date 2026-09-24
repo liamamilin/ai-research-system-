@@ -31,7 +31,7 @@ _registry = TaskRegistry()
 
 PROMPT_VARIABLES = {
     "name", "keywords", "language", "date", "date_1d_ago", "date_7d_ago",
-    "time", "datetime", "recent_outcomes",
+    "time", "datetime", "recent_outcomes", "reported_events",
 }
 OUTPUT_VARIABLES = {"name", "date", "time", "datetime"}
 TEMPLATE_CATEGORIES = {"monitoring", "research", "analysis", "practice", "actionable"}
@@ -706,6 +706,20 @@ def update_yaml(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=ApiError.make("file_missing", "job 文件不存在"),
+            )
+
+    parsed = None
+    try:
+        parsed = yaml_io.parse_yaml(payload.yaml_content)
+    except ValueError:
+        parsed = None  # reported by save_job_yaml below
+    if parsed:
+        output_errors = yaml_io.validate_output_path(
+            parsed, output_root=os.path.join(settings.paths.output_dir))
+        if output_errors:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=ApiError.make("invalid_output", "；".join(output_errors)),
             )
 
     try:

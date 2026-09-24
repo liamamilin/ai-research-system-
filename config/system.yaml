@@ -67,6 +67,22 @@ research:
   max_rounds: 12
   max_searches: 12
   context_char_budget: 150000
+  # Cross-round event memory: {reported_events} lists sources already cited in
+  # recent rounds so daily digests stop repeating them as new findings.
+  event_memory:
+    enabled: true
+    days: 7
+    limit: 15
+  # Citation provenance: compare every URL in the finished report against the
+  # URLs this run actually retrieved, and optionally probe the unmatched ones
+  # (those are the likely hallucinations / 404s). Results land in
+  # report_meta.jsonl and the run log; they never fail a run.
+  citation_check:
+    enabled: true
+    min_coverage: 0.6           # citation coverage below this is flagged (null = off)
+    verify_unreachable: false   # true = HTTP HEAD/GET the unmatched URLs
+    max_checks: 10              # cap probes per report
+    timeout: 5.0                # seconds per probe
 
 # ---------------------------------------------------------------------------
 # Monthly budget guardrail (uses ai.pricing for the cost estimate)

@@ -274,6 +274,26 @@ export function ReportViewPage() {
             {meta.ts ? ` · ${String(meta.ts).slice(0, 19).replace("T", " ")}` : ""}
           </span>
         )}
+        {meta?.citation_check?.total > 0 && (
+          <span
+            className={cn(
+              "badge border",
+              meta.citation_check.unmatched === 0
+                ? "bg-green-900/40 text-green-400 border-green-800"
+                : meta.citation_check.coverage >= 0.8
+                  ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
+                  : "bg-red-900/40 text-red-400 border-red-800"
+            )}
+            title={
+              meta.citation_check.unmatched_examples?.length
+                ? `未在本次检索结果中的引用：\n${meta.citation_check.unmatched_examples.join("\n")}`
+                : "报告中所有 URL 都来自本次检索"
+            }
+          >
+            引用 {meta.citation_check.matched}/{meta.citation_check.total} 可追溯
+            {meta.citation_check.unmatched > 0 && `（${meta.citation_check.unmatched} 个存疑）`}
+          </span>
+        )}
       </div>
 
       <div className="flex gap-4 items-start">

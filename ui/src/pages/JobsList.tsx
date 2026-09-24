@@ -269,7 +269,7 @@ export function JobsListPage() {
                 value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
               <p className="text-[11px] text-text-muted/80 mt-1">
                 可用变量：{"{name}"} {"{keywords}"} {"{language}"} {"{date}"} {"{date_1d_ago}"}{" "}
-                {"{date_7d_ago}"} {"{time}"} {"{datetime}"} {"{recent_outcomes}"}（上一轮已判定结果）；
+                {"{date_7d_ago}"} {"{time}"} {"{datetime}"} {"{recent_outcomes}"}（上一轮已判定结果）{"{reported_events}"}（已报道来源）；
                 输出路径模板支持 {"{name}"} {"{date}"} {"{time}"} {"{datetime}"}。建议写清：角色、目标、输出结构、每条发现的证据要求（发布日期 + 来源 URL）。
               </p>
             </div>
