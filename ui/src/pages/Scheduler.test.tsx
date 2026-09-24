@@ -103,3 +103,77 @@ describe("Scheduler job picker", () => {
     });
   });
 });
+
+describe("Scheduler missed-run banners", () => {
+  const CRON_JOB = {
+    id: "practical_ai_intelligence",
+    minute: "0",
+    hour: "6",
+    day_of_month: "*",
+    month: "*",
+    day_of_week: "*",
+    command: "bash scripts/run_practical_intelligence.sh >> logs/cron_pipeline.log 2>&1",
+    enabled: true,
+  };
+
+  function mockScheduler(health: unknown) {
+    const fn = vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path.includes("/api/scheduler/jobs")) return jsonResponse(JOBS);
+      if (path.includes("/api/scheduler")) {
+        return jsonResponse({ jobs: [CRON_JOB], total: 1, health });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fn);
+  }
+
+  it("shows an overdue banner with the missed slot", async () => {
+    mockScheduler({
+      jobs: [{
+        id: "practical_ai_intelligence",
+        status: "overdue",
+        schedule: "0 6 * * *",
+        last_expected_at: "2026-09-24T06:00:00",
+        last_ran_at: "2026-09-21T06:10:00",
+        missed_hours: 79,
+        detail: "上次应运行 09-24 06:00，但最近一次实际运行是 09-21 06:10",
+      }],
+      overdue: 1,
+      paused: 0,
+    });
+    render(<SchedulerPage />);
+    expect(await screen.findByText(/漏跑：practical_ai_intelligence/)).toBeTruthy();
+    expect(screen.getByText(/上次应运行 09-24 06:00/)).toBeTruthy();
+  });
+
+  it("shows a paused banner without claiming a failure", async () => {
+    mockScheduler({
+      jobs: [{
+        id: "practical_ai_intelligence",
+        status: "paused",
+        schedule: "0 6 * * *",
+        detail: "调度已暂停，cron 不会触发该任务",
+      }],
+      overdue: 0,
+      paused: 1,
+    });
+    render(<SchedulerPage />);
+    expect(await screen.findByText(/已暂停：practical_ai_intelligence/)).toBeTruthy();
+    expect(screen.queryByText(/漏跑/)).toBeNull();
+  });
+
+  it("stays silent when every job is on time", async () => {
+    mockScheduler({
+      jobs: [{ id: "practical_ai_intelligence", status: "ok", schedule: "0 6 * * *", detail: "最近一次实际运行：09-24 06:12" }],
+      overdue: 0,
+      paused: 0,
+    });
+    render(<SchedulerPage />);
+    await waitFor(() => {
+      expect(screen.getByText("practical_ai_intelligence")).toBeTruthy();
+    });
+    expect(screen.queryByText(/漏跑/)).toBeNull();
+    expect(screen.queryByText(/已暂停/)).toBeNull();
+  });
+});

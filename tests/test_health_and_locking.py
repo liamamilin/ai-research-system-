@@ -209,6 +209,11 @@ def test_health_api_reports_status(client, web_env):
     assert body["status"] in ("ok", "warn")
     assert "config" not in body["errors"]
     assert "stale_locks" in body
+    # the schedule check is part of the aggregate, not bolted on afterwards
+    assert "schedule" in body
+    assert any(c["name"] == "schedule" for c in body["checks"])
+    if body["schedule"]["status"] == "warn":
+        assert "schedule" in body["warnings"]
 
 
 def test_health_api_detailed_requires_admin(client, web_env):

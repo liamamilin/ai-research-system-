@@ -3,7 +3,7 @@ import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/components/ErrorState";
 import { useToast } from "@/lib/toast";
-import { Clock, Trash2, Play, Pause, HelpCircle } from "lucide-react";
+import { AlertTriangle, Clock, PauseCircle, Trash2, Play, Pause, HelpCircle } from "lucide-react";
 import { CronBuilder } from "@/components/CronBuilder";
 
 interface CronJob {
@@ -26,6 +26,16 @@ interface SchedulableJob {
   command: string;
 }
 
+interface JobScheduleState {
+  id: string;
+  status: "ok" | "paused" | "overdue" | "unverified" | "no_schedule";
+  detail: string;
+  schedule: string;
+  last_expected_at?: string;
+  last_ran_at?: string;
+  missed_hours?: number;
+}
+
 export function SchedulerPage() {
   const toast = useToast();
   const [jobs, setJobs] = useState<CronJob[]>([]);
@@ -36,13 +46,21 @@ export function SchedulerPage() {
   const [newJob, setNewJob] = useState({ id: "", schedule: "", command: "" });
   const [msg, setMsg] = useState("");
   const [schedulable, setSchedulable] = useState<SchedulableJob[]>([]);
+  const [states, setStates] = useState<Record<string, JobScheduleState>>({});
   const [jobQuery, setJobQuery] = useState("");
 
   const fetchJobs = async () => {
     setLoading(true);
     try {
-      const data = await api<{ jobs: CronJob[]; total: number }>("/api/scheduler");
+      const data = await api<{
+        jobs: CronJob[];
+        total: number;
+        health?: { jobs: JobScheduleState[] };
+      }>("/api/scheduler");
       setJobs(data.jobs);
+      const next: Record<string, JobScheduleState> = {};
+      for (const entry of data.health?.jobs || []) next[entry.id] = entry;
+      setStates(next);
     } catch (err: any) {
       setError(err.message || "加载失败");
     } finally {
@@ -345,6 +363,28 @@ export function SchedulerPage() {
           <button onClick={handleAdd} className="btn btn-primary w-full justify-center">创建调度</button>
         </div>
       )}
+
+      {Object.values(states).filter((s) => s.status === "overdue").map((s) => (
+        <div key={`overdue-${s.id}`} role="alert"
+          className="card border-danger/60 bg-red-900/10 px-4 py-3 text-sm space-y-1">
+          <div className="flex items-center gap-2 text-danger">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            <span>漏跑：{s.id}</span>
+          </div>
+          <div className="text-xs text-text-muted">{s.detail}</div>
+          <div className="text-xs text-text-muted font-mono">{s.schedule}</div>
+        </div>
+      ))}
+      {Object.values(states).filter((s) => s.status === "paused").map((s) => (
+        <div key={`paused-${s.id}`}
+          className="card border-warning/50 bg-amber-900/10 px-4 py-3 text-sm space-y-1">
+          <div className="flex items-center gap-2 text-warning">
+            <PauseCircle className="w-4 h-4 shrink-0" />
+            <span>已暂停：{s.id}（cron 不会触发）</span>
+          </div>
+          <div className="text-xs text-text-muted">需要自动运行时，在下方点启用。</div>
+        </div>
+      ))}
 
       {loading ? (
         <div className="text-sm text-text-muted">加载中...</div>

@@ -41,6 +41,22 @@ from web.indexer.watcher import start_watcher
 logger = logging.getLogger("ai_research.web")
 
 
+def _schedule_check(state_dir: str) -> dict:
+    """Schedule state as a health-check entry (missed runs, paused jobs)."""
+    from web.services.scheduler import schedule_health
+
+    report = schedule_health(state_dir=state_dir, repo_dir=os.getcwd())
+    status_map = {"error": "error", "warn": "warn", "unknown": "warn", "ok": "ok"}
+    return {
+        "name": "schedule",
+        "status": status_map.get(report.get("status", "unknown"), "warn"),
+        "detail": report.get("detail", ""),
+        "jobs": report.get("jobs", []),
+        "overdue": report.get("overdue", 0),
+        "paused": report.get("paused", 0),
+    }
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -160,7 +176,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health/detailed")
     def health_detailed(user=Depends(require_admin)):
-        """Full health report including index, vector and last-round state."""
+        """Full health report including index, vector, schedule and last-round state."""
         from core.health import run_checks, stale_locks
 
         settings = get_settings()
@@ -171,6 +187,17 @@ def create_app() -> FastAPI:
             deep=True,
         )
         result["stale_locks"] = stale_locks(settings.paths.state_dir)
+        schedule = _schedule_check(settings.paths.state_dir)
+        result["schedule"] = schedule
+        # Keep the aggregate in sync: the schedule check is part of health.
+        result["checks"].append(schedule)
+        if schedule["status"] == "error":
+            result["errors"].append(schedule["name"])
+            result["status"] = "error"
+        elif schedule["status"] == "warn" and "schedule" not in result["warnings"]:
+            result["warnings"].append(schedule["name"])
+            if result["status"] == "ok":
+                result["status"] = "warn"
         return result
 
     # ----- Static SPA (production) -----

@@ -14,7 +14,11 @@ router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
 
 @router.get("")
 def list_scheduled(user=Depends(require_admin)):
-    """List all scheduled cron jobs."""
+    """List all scheduled cron jobs, with missed-run state for each."""
+    import os
+
+    from web.settings import get_settings
+
     try:
         jobs = scheduler.list_jobs()
     except RuntimeError as e:
@@ -22,7 +26,21 @@ def list_scheduled(user=Depends(require_admin)):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=ApiError.make("scheduler_error", str(e)),
         )
-    return {"jobs": jobs, "total": len(jobs)}
+    try:
+        classified = scheduler.classify_jobs(
+            jobs, state_dir=get_settings().paths.state_dir, repo_dir=os.getcwd())
+    except Exception as e:  # noqa: BLE001 - listing jobs must not fail on detection
+        classified = []
+        audit.log(user.username, "scheduler.detect_failed", detail=str(e))
+    return {
+        "jobs": jobs,
+        "total": len(jobs),
+        "health": {
+            "jobs": classified,
+            "overdue": sum(1 for j in classified if j["status"] == "overdue"),
+            "paused": sum(1 for j in classified if j["status"] == "paused"),
+        },
+    }
 
 
 @router.get("/jobs")
