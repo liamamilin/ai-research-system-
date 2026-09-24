@@ -17,6 +17,10 @@ _INDEXED_EXT = {".md", ".mdx"}
 # Common patterns to skip
 _SKIP_DIRS = {"node_modules", "__pycache__", ".git", ".DS_Store"}
 
+# Upper bound for the FTS payload of one report (2 MB of text is far beyond a
+# typical report; the cap only guards against pathological files).
+MAX_INDEX_BYTES = 2 * 1024 * 1024
+
 
 def extract_title(file_path: str) -> str:
     """Extract the first markdown heading (# title) from a file."""
@@ -68,12 +72,14 @@ def index_file(output_dir: str, rel_path: str) -> bool:
         category = Path(rel_path).parts[0] if len(Path(rel_path).parts) > 1 else ""
         job_name = infer_job_name(rel_path)
 
-        # Read content for FTS indexing (limit to 100KB)
+        # Read the document for full-text indexing. Reports used to be
+        # truncated at 100KB and files >= 500KB were skipped entirely, so
+        # their body was invisible to search.
         content = ""
-        if size > 0 and size < 500_000:
+        if size > 0:
             try:
                 with open(full_path, "r", encoding="utf-8", errors="replace") as f:
-                    content = f.read(100_000)
+                    content = f.read(MAX_INDEX_BYTES)
             except OSError:
                 pass
 

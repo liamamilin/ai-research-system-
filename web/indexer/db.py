@@ -12,6 +12,14 @@ from typing import Iterator, Optional
 _DB_PATH_OVERRIDE: str | None = None
 _lock = threading.Lock()
 
+# Trigram indexing makes Chinese/Japanese full-text search work: unicode61
+# treats a run of CJK characters as a single token, so "独立游戏" never matches
+# a report that writes "独立 游戏的发行". Queries with terms shorter than
+# three characters cannot use trigrams and fall back to a LIKE scan.
+FTS_TOKENIZER = "trigram"
+FTS_SCHEMA_VERSION = 2
+MIN_TRIGRAM_QUERY = 3
+
 
 def db_path() -> str:
     if _DB_PATH_OVERRIDE:
@@ -57,6 +65,7 @@ def _ensure_columns(conn: sqlite3.Connection) -> None:
 
 def init_db():
     """Create tables and FTS5 virtual table if they don't exist."""
+    rebuilt = False
     with _lock, connect() as conn:
         conn.executescript(
             """
@@ -70,16 +79,32 @@ def init_db():
         indexed_at REAL NOT NULL
     );
 
-    CREATE VIRTUAL TABLE IF NOT EXISTS reports_fts USING fts5(
-        title, content,
-        tokenize='unicode61'
-    );
-
     CREATE INDEX IF NOT EXISTS idx_reports_mtime ON reports(mtime);
     CREATE INDEX IF NOT EXISTS idx_reports_category ON reports(category);
     """
         )
         _ensure_columns(conn)
+        rebuilt = _ensure_fts_table(conn)
+    return {"fts_rebuilt": rebuilt}
+
+
+def _ensure_fts_table(conn) -> bool:
+    """Create (or migrate) the FTS5 table. Returns True when it was rebuilt."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='reports_fts'"
+    ).fetchone()
+    expected = f"tokenize='{FTS_TOKENIZER}'"
+    if row is not None and row["sql"] and expected in row["sql"]:
+        return False
+
+    had_table = row is not None
+    if had_table:
+        conn.execute("DROP TABLE reports_fts")
+    conn.execute(
+        f"CREATE VIRTUAL TABLE reports_fts USING fts5(title, content, tokenize='{FTS_TOKENIZER}')"
+    )
+    conn.execute(f"PRAGMA user_version = {FTS_SCHEMA_VERSION}")
+    return had_table
 
 
 def _serialize_row(row: sqlite3.Row) -> dict:
@@ -175,7 +200,15 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
 
     Returns results with highlighted snippets.
     """
-    safe_query = sanitize_fts_query(query)
+    text = (query or "").strip()
+    if not text:
+        return []
+    terms = [t for t in text.split() if t]
+    # Trigram needs >= 3 characters per term; anything shorter (e.g. "RAG",
+    # "AI") would silently match nothing, so fall back to a LIKE scan.
+    if not terms or any(len(t) < MIN_TRIGRAM_QUERY for t in terms):
+        return _search_like(text, limit)
+    safe_query = sanitize_fts_query(text)
     if not safe_query:
         return []
     with connect() as conn:
@@ -201,6 +234,34 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
             (safe_query, limit),
         ).fetchall()
         return [_serialize_row(r) for r in rows]
+
+
+def _search_like(text: str, limit: int) -> list[dict]:
+    """Substring search for terms too short for trigram indexing.
+
+    Trigrams cannot match one- or two-character terms, and the body text only
+    lives in the FTS index, so short queries match titles and paths only.
+    """
+    pattern = f"%{text.replace('%', '').replace('_', '')}%"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT path, job_name, title, category, size_bytes, mtime,
+                   favorite, tags, read_at
+            FROM reports
+            WHERE title LIKE ? COLLATE NOCASE
+               OR path LIKE ? COLLATE NOCASE
+            ORDER BY mtime DESC
+            LIMIT ?
+            """,
+            (pattern, pattern, limit),
+        ).fetchall()
+    out = []
+    for row in rows:
+        item = _serialize_row(row)
+        item["snippet"] = None
+        out.append(item)
+    return out
 
 
 def get_report(path: str) -> Optional[dict]:

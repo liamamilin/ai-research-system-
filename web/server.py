@@ -66,7 +66,11 @@ async def lifespan(app: FastAPI):
     user_db.init_db()
 
     # Initialize report indexer
-    index_db.init_db()
+    init_result = index_db.init_db()
+    if init_result.get("fts_rebuilt"):
+        # Tokenizer migration: the FTS table was recreated, so the documents
+        # must be re-read before search works again.
+        logger.warning("Full-text index rebuilt; rescanning reports...")
     scan_result = full_scan(settings.paths.output_dir)
     if scan_result["indexed"] > 0:
         logger.info("Indexed %d reports from %s", scan_result["indexed"], settings.paths.output_dir)

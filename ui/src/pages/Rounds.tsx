@@ -18,6 +18,7 @@ const STAGE_STYLES: Record<string, string> = {
   failed: "border-danger/60 text-danger",
   cancelled: "border-warning/60 text-warning",
   skipped: "border-warning/60 text-warning",
+  stale: "border-warning/60 text-warning animate-pulse",
 };
 
 function stageStyle(status: string): string {
@@ -34,6 +35,7 @@ export function RoundsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
   const [compareDate, setCompareDate] = useState<string | null>(null);
   const [detailDate, setDetailDate] = useState<string | null>(null);
   const timerRef = useRef<number | null>(null);
@@ -82,11 +84,23 @@ export function RoundsPage() {
   };
 
   const handleRetry = async () => {
-    if (!window.confirm("补跑未完成/失败的阶段？")) return;
+    const ok = window.confirm(
+      "补跑未完成/失败的阶段？\n\n" +
+      "依赖这些阶段的下游产物（P7/P8/P9）会被标记为过期并一并重跑，" +
+      "避免综合结论沿用旧的上游文档。"
+    );
+    if (!ok) return;
     setBusy(true);
     setError("");
     try {
-      await retryRound(3);
+      const result = await retryRound(3, true);
+      const invalidated = result?.invalidated_stages ?? [];
+      if (invalidated.length > 0) {
+        setNotice(
+          `已重新运行 ${(result?.rerun_stages?.length ?? 0) + invalidated.length} 个阶段` +
+          `（其中 ${invalidated.length} 个下游阶段因上游重跑而失效）`
+        );
+      }
       setRunning(true);
       await load();
     } catch (err: unknown) {
@@ -162,6 +176,10 @@ export function RoundsPage() {
 
       {error && (
         <div className="text-sm text-danger bg-red-900/20 px-3 py-2 rounded-md">{error}</div>
+      )}
+
+      {notice && (
+        <div className="text-sm text-accent bg-accent/10 px-3 py-2 rounded-md">{notice}</div>
       )}
 
       {loading ? (

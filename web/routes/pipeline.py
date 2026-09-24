@@ -186,8 +186,15 @@ def run_round(request: Request, payload: dict | None = None,
 
 @router.post("/retry")
 def retry_round(request: Request, payload: dict | None = None,
+                invalidate_downstream: bool = Query(
+                    True, description="also re-run stages that consumed a re-run stage"),
                 user=Depends(require_editor)):
-    """Re-run the unfinished stages of today's (or a given) round."""
+    """Re-run the unfinished stages of today's (or a given) round.
+
+    By default every stage that consumed the output of a re-run stage is
+    invalidated and re-run as well, so the round cannot report success while
+    its synthesis still reflects stale upstream documents.
+    """
     settings = get_settings()
     payload = payload or {}
     try:
@@ -204,6 +211,7 @@ def retry_round(request: Request, payload: dict | None = None,
             concurrency=concurrency,
             trigger=user["username"],
             date=date,
+            invalidate_downstream=invalidate_downstream,
         )
     except RuntimeError as e:
         raise HTTPException(

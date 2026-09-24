@@ -61,6 +61,20 @@ GROUPS: list[tuple[str, list[str]]] = [
     ("P9", ["09_executive_synthesis_and_actions"]),
 ]
 
+# Real data dependencies. P1-P6 are independent radars; P7/P8 synthesise them
+# and P9 synthesises P7/P8. Re-running a stage therefore invalidates whatever
+# consumed its output.
+_RADAR_KEYS = tuple(key for key, _, _ in STAGES[1:7])
+STAGE_DEPS: dict[str, tuple[str, ...]] = {
+    STAGES[0][0]: (),
+    **{key: () for key in _RADAR_KEYS},
+    "07_product_content_opportunities": _RADAR_KEYS,
+    "08_risk_and_alternatives": _RADAR_KEYS,
+    "09_executive_synthesis_and_actions": (
+        "07_product_content_opportunities", "08_risk_and_alternatives",
+    ),
+}
+
 _STAGE_FILE = {key: fname for key, fname, _ in STAGES}
 _STAGE_LABEL = {key: label for key, _, label in STAGES}
 
@@ -330,13 +344,43 @@ def _sync_round_tracking(date: str, written: dict) -> None:
         logger.warning("Round %s tracking sync failed: %s", date, exc)
 
 
+def downstream_closure(keys) -> list[str]:
+    """Stages that consume the output of any of ``keys`` (transitively)."""
+    result: set[str] = set()
+    pending = {k for k in keys}
+    while pending:
+        affected = result | pending
+        dependents = {
+            stage for stage, deps in STAGE_DEPS.items()
+            if any(dep in affected for dep in deps)
+        }
+        new = dependents - affected
+        if not new:
+            break
+        result |= new
+        pending = new
+    return [key for key, _, _ in STAGES if key in result]
+
+
+def plan_retry(file_stages: dict, previous: dict,
+               invalidate_downstream: bool = True) -> dict:
+    """Stages a retry must run, plus the downstream stages it invalidates."""
+    needed = _stages_needing_rerun(file_stages, previous)
+    downstream = downstream_closure(needed) if invalidate_downstream else []
+    return {
+        "needed": needed,
+        "invalidated": downstream,
+        "run": needed + [k for k in downstream if k not in needed],
+    }
+
+
 def _stages_needing_rerun(file_stages: dict, previous: dict) -> list[str]:
     """Stages to re-run: output missing, or last attempt truly failed.
 
-    "skipped" means "already complete in an earlier retry" and must NOT
+    ``skipped`` means "already complete in an earlier retry" and must NOT
     trigger a rerun (regression guard).
     """
-    rerun_statuses = {"failed", "cancelled", "interrupted"}
+    rerun_statuses = {"failed", "cancelled", "interrupted", "stale"}
     needed: list[str] = []
     for key, _, _ in STAGES:
         status = (previous.get(key) or {}).get("status", "")
@@ -347,10 +391,14 @@ def _stages_needing_rerun(file_stages: dict, previous: dict) -> list[str]:
 
 def start_retry(config_dir: str, jobs_dir: str, output_dir: str,
                 concurrency: int = 3, trigger: str = "web",
-                date: Optional[str] = None) -> dict:
+                date: Optional[str] = None,
+                invalidate_downstream: bool = True) -> dict:
     """Re-run the unfinished stages of a round (missing/failed/interrupted).
 
-    Dependency groups are preserved; completed stages are marked ``skipped``.
+    Stages that consumed the output of a re-run stage are invalidated and
+    re-run too, unless ``invalidate_downstream`` is disabled — otherwise a
+    round could report success while its synthesis still reflects the old
+    upstream documents.
     """
     date = date or datetime.now().strftime("%Y-%m-%d")
 
@@ -362,7 +410,10 @@ def start_retry(config_dir: str, jobs_dir: str, output_dir: str,
                 raise RuntimeError("已有一轮正在运行")
 
         previous = _rounds.get(date, {}).get("stages", {})
-        needed = _stages_needing_rerun(file_stages, previous)
+        plan = plan_retry(file_stages, previous, invalidate_downstream)
+        needed = plan["needed"]
+        run_set = set(plan["run"])
+        invalidated = set(plan["invalidated"])
 
         if not needed:
             raise RuntimeError("该轮次已全部完成，无需补跑")
@@ -379,8 +430,10 @@ def start_retry(config_dir: str, jobs_dir: str, output_dir: str,
                     "key": key,
                     "label": _STAGE_LABEL[key],
                     "file": _STAGE_FILE[key],
-                    "status": "pending" if key in needed else "skipped",
+                    "status": "stale" if key in invalidated
+                              else ("pending" if key in run_set else "skipped"),
                     "group": next(g for g, keys in GROUPS if key in keys),
+                    "invalidated": key in invalidated,
                 }
                 for key, _, _ in STAGES
             },
@@ -391,14 +444,21 @@ def start_retry(config_dir: str, jobs_dir: str, output_dir: str,
     thread = threading.Thread(
         target=_run_round,
         args=(state, config_dir, jobs_dir,
-              max(1, min(int(concurrency), 6)), set(needed)),
+              max(1, min(int(concurrency), 6)), run_set),
         daemon=True,
         name=f"pipeline-retry-{date}",
     )
     thread.start()
-    logger.info("Round %s retry started for %d stage(s): %s",
-                date, len(needed), ", ".join(k[:2] for k in needed))
-    return _public_state(state)
+    logger.info(
+        "Round %s retry: %d stage(s) to run%s",
+        date, len(run_set),
+        f"; invalidated downstream: {', '.join(k[:2] for k in plan['invalidated'])}"
+        if plan["invalidated"] else "",
+    )
+    public = _public_state(state)
+    public["rerun_stages"] = needed
+    public["invalidated_stages"] = plan["invalidated"]
+    return public
 
 
 def _public_state(state: dict) -> dict:

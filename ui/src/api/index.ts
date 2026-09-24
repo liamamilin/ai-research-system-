@@ -400,8 +400,14 @@ export async function cancelRound(): Promise<{ ok: boolean }> {
   return api("/api/pipeline/cancel", { method: "POST" });
 }
 
-export async function retryRound(concurrency = 3): Promise<Round["live"]> {
-  return api("/api/pipeline/retry", { method: "POST", body: { concurrency } });
+export async function retryRound(
+  concurrency = 3,
+  invalidateDownstream = true
+): Promise<{ invalidated_stages?: string[]; rerun_stages?: string[] }> {
+  return api("/api/pipeline/retry", {
+    method: "POST",
+    body: { concurrency, date: null, invalidate_downstream: invalidateDownstream },
+  });
 }
 
 // --- Round item tracking ---

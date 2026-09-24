@@ -89,11 +89,19 @@ def test_search_includes_meta(db):
 
 
 def test_search_sanitizes_fts_operators(db):
+    """Operator-laden input must never raise.
+
+    The index uses the trigram tokenizer, where matching is substring based and
+    FTS operators such as ``*`` are literal characters rather than syntax.
+    """
     _add()
     assert index_db.search_reports("hello") != []
     assert index_db.search_reports("zzz-nothing") == []
-    assert index_db.search_reports("hello*") != []
+    # No exception, and a literal "*" simply does not occur in the documents.
+    assert index_db.search_reports("hello*") == []
+    assert index_db.search_reports("hello world") != []
     assert index_db.search_reports('"unbalanced') == []
+    assert index_db.search_reports("AND OR NOT") == []
     assert index_db.search_reports("") == []
     assert index_db.search_reports("  ") == []
 
