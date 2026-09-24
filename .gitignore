@@ -15,6 +15,9 @@ env/
 
 # macOS
 .DS_Store
+*.app
+scripts/.launcher.rendered.applescript
+scripts/.start_server.rendered.sh
 
 # Logs
 logs/

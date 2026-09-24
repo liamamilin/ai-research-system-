@@ -1,0 +1,167 @@
+-- AI Research Console launcher (macOS applet) — TEMPLATE
+--
+-- This file is a template: scripts/build_launcher.sh replaces the @...@
+-- placeholders with the paths of the machine that builds it, then runs
+-- osacompile. Do not edit the generated .app; edit this file and rebuild.
+--
+-- Behaviour:
+--   * Click            -> if the web service is healthy, open the browser;
+--                         otherwise start it, wait until healthy (max 30 min),
+--                         then open the browser. The app stays in the Dock.
+--   * Click while open -> "reopen" handler jumps to the already-open service.
+--   * Watchdog         -> checks /api/health every 60s; after 30 continuous
+--                         minutes without a healthy response the app quits.
+--                         Quitting does not stop the server, so the next click
+--                         re-attaches and opens the running instance.
+--
+-- Notes:
+--   * The server is started detached (nohup), so the app can be quit freely.
+--   * A wedged server (port held, health failing) is stopped via the PID file
+--     before a restart is attempted; otherwise the new process would fail to
+--     bind and the launcher would spin until it timed out.
+--   * Server output goes to @LOG_FILE@
+
+property baseUrl : "http://127.0.0.1:8765"
+property projectDir : "@PROJECT_DIR@"
+property pythonBin : "@PYTHON_BIN@"
+property logFile : "@LOG_FILE@"
+property startScript : "@START_SCRIPT@"
+property lastOk : missing value
+property timeoutMinutes : 30
+property startupMinutes : 30
+property restartsTried : 0
+
+on healthOk()
+	try
+		do shell script "/usr/bin/curl -s -m 3 -o /dev/null " & quoted form of (baseUrl & "/api/health")
+		return true
+	on error
+		return false
+	end try
+end healthOk
+
+on serverPid()
+	try
+		set pidPath to projectDir & "/state/server.pid"
+		set f to open for access (POSIX file pidPath)
+		set rawText to read f as «class utf8»
+		close access f
+		set pidText to (rawText as string)
+		if pidText is "" then return missing value
+		return (pidText as integer)
+	on error
+		return missing value
+	end try
+end serverPid
+
+on stopStaleServer()
+	-- A process that holds the port but answers no health check has to go
+	-- before the port can be reused.
+	set thePid to serverPid()
+	if thePid is missing value then return false
+	try
+		do shell script "/bin/kill -0 " & thePid
+	on error
+		return false -- already gone
+	end try
+	try
+		do shell script "/bin/kill " & thePid
+		repeat 10 times
+			try
+				do shell script "/bin/kill -0 " & thePid
+			on error
+				return true
+			end try
+			delay 0.5
+		end repeat
+		do shell script "/bin/kill -9 " & thePid
+		delay 1
+	on error
+		return false
+	end try
+	postNotification("服务无响应，已回收进程 " & thePid & " 并重新启动")
+	return true
+end stopStaleServer
+
+on startServer()
+	-- The detaching lives in a shell script, not inline: `do shell script`
+	-- blocks on a backgrounded chain written inline, so the launcher would
+	-- hang here instead of returning to the user.
+	try
+		do shell script quoted form of startScript
+		return true
+	on error errMsg
+		postNotification("服务启动失败: " & errMsg)
+		return false
+	end try
+end startServer
+
+on ensureServer()
+	if healthOk() then return true
+	if restartsTried is 0 then
+		stopStaleServer()
+		set restartsTried to restartsTried + 1
+	end if
+	startServer()
+	return healthOk()
+end ensureServer
+
+on openBrowser()
+	open location baseUrl & "/"
+end openBrowser
+
+on postNotification(messageText)
+	-- Notifications are best-effort: on a machine without Notification Center
+	-- (or when permission is denied) this throws, and it must never interrupt
+	-- the recovery flow it is reporting about.
+	try
+		display notification messageText with title "AI Research Console"
+	on error errText
+		set ignored to errText
+	end try
+end postNotification
+
+on notifyTimeout()
+	postNotification("服务 30 分钟无响应，应用将关闭")
+end notifyTimeout
+
+on run
+	set restartsTried to 0
+	set lastOk to current date
+	ensureServer()
+
+	-- Wait for the service to become healthy (startup, max 30 minutes)
+	repeat until healthOk()
+		if ((current date) - lastOk) > startupMinutes * minutes then
+			notifyTimeout()
+			quit
+			return
+		end if
+		delay 2
+	end repeat
+
+	set lastOk to current date
+	openBrowser()
+	-- Stay resident: returning an idle interval is what makes the watchdog below
+	-- run at all. Without it the applet quits right after opening the browser
+	-- and the 30-minute timeout would never be observed.
+	return 60
+end run
+
+on reopen
+	-- Dock/Finder click while the app is running: jump to the service
+	set restartsTried to 0
+	ensureServer()
+	set lastOk to current date
+	openBrowser()
+end reopen
+
+on idle
+	if healthOk() then
+		set lastOk to current date
+	else if lastOk is not missing value and ((current date) - lastOk) > timeoutMinutes * minutes then
+		notifyTimeout()
+		quit
+	end if
+	return 60
+end idle

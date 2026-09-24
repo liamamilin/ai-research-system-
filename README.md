@@ -134,15 +134,27 @@ python scripts/export_round_artifacts.py --all        # every round
 
 ### macOS 启动器 App
 
-项目根目录有 `AI Research Console.app`（源码：`scripts/launcher.applescript`）：
+双击项目根目录的 `AI Research Console.app`：
 
-- 双击：服务未启动 → 自动启动并打开浏览器；服务已启动 → 直接跳转
-- 再次点击（App 已在运行）：跳转到服务页面
-- 看门狗：每 60s 检查一次 `/api/health`，服务连续 30 分钟无响应则自动关闭 App
-- 退出 App 不会停止服务（服务以 nohup 分离运行）；下次点击会重新接管
+- 服务未启动 → 自动启动服务（约 5–25 秒，取决于机器）并打开浏览器
+- 服务已在运行 → 直接跳转，不重启服务
+- 再次点击（App 已在 Dock 中）→ 跳转到已在运行的页面（实测 PID 不变）
+- 假死服务（占着端口但不响应）→ 先按 `state/server.pid` 回收旧进程再重启
+- 看门狗：每 60s 检查 `/api/health`，连续 30 分钟无响应则自动关闭 App
+- 退出 App **不会**停止服务（服务以 nohup 分离运行），下次点击重新接管
 - 服务输出写入 `logs/app_launcher.log`
 
-重新编译：`osacompile -o "AI Research Console.app" scripts/launcher.applescript`
+源码是模板 `scripts/launcher.applescript.in`（`@...@` 为占位符），
+脱离式启动脚本是 `scripts/start_server_detached.sh`。两者都会在构建时
+写入本机的绝对路径，**仓库移动或换了虚拟环境后需要重新构建**：
+
+```bash
+bash scripts/build_launcher.sh              # 构建到仓库根目录
+bash scripts/build_launcher.sh ~/Applications  # 构建并安装到「应用程序」
+```
+
+`build_launcher.sh` 用 `osacompile -s`（stay-open）编译：不带 `-s` 的
+applet 在 `run` 返回后立即退出，`on idle` 看门狗永远不会执行。
 
 ### Web UI
 
