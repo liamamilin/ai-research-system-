@@ -70,6 +70,12 @@ run_stage() {
 ALL_OK=true
 
 # ------------------------------------------------------------------
+# Mark the round as started so the Rounds page and health checks see it
+# ------------------------------------------------------------------
+ROUND_DATE="$(date '+%Y-%m-%d')"
+$RUN --round-start "$ROUND_DATE" || echo "  ⚠ [Round] could not record round start"
+
+# ------------------------------------------------------------------
 # Budget guard (skip with SKIP_BUDGET_CHECK=1)
 # ------------------------------------------------------------------
 if [ "${SKIP_BUDGET_CHECK:-0}" != "1" ]; then

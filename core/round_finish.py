@@ -16,6 +16,27 @@ logger = logging.getLogger(__name__)
 
 PIPELINE_DIR = "practical_ai_intelligence"
 
+# (stage key, output filename, label) — mirrors web/runner/pipeline.STAGES so
+# CLI/cron rounds can be scored from the files they produced.
+_PIPELINE_STAGES = [
+    ("00_collection_planner", "00_collection_plan.md", "P0 采集计划"),
+    ("01_model_and_pricing_radar", "01_model_and_pricing_radar.md", "P1 模型定价"),
+    ("02_ai_coding_tools_radar", "02_ai_coding_tools_radar.md", "P2 编程工具"),
+    ("03_agent_workflow_radar", "03_agent_workflow_radar.md", "P3 Agent 工作流"),
+    ("04_project_understanding_radar", "04_project_understanding_radar.md", "P4 项目理解"),
+    ("05_context_rag_memory_radar", "05_context_rag_memory_radar.md", "P5 上下文/RAG"),
+    ("06_infra_and_eval_radar", "06_infra_and_eval_radar.md", "P6 基础设施/评测"),
+    ("07_product_content_opportunities", "07_product_content_opportunities.md", "P7 产品内容机会"),
+    ("08_risk_and_alternatives", "08_risk_and_alternatives.md", "P8 风险与替代"),
+    ("09_executive_synthesis_and_actions", "09_executive_synthesis_and_actions.md", "P9 执行综合"),
+]
+
+
+def rounds_now() -> str:
+    from core.rounds import now_iso
+
+    return now_iso()
+
 
 def finish_round(date: str, output_dir: str = "output", state_dir: str = "state",
                  config_dir: str = "config",
@@ -50,6 +71,36 @@ def finish_round(date: str, output_dir: str = "output", state_dir: str = "state"
     for filename, payload in (written or {}).items():
         for warning in (payload or {}).get("warnings", []):
             summary.setdefault("warnings", []).append(f"{filename}: {warning}")
+
+    # Record the round so the Rounds page and health checks see CLI/cron runs.
+    try:
+        from .rounds import infer_stage_status, upsert_round
+
+        stage_files = {}
+        for stage in _PIPELINE_STAGES:
+            stage_files[stage[0]] = stage[1]
+        stages = infer_stage_status(round_dir, stage_files)
+        ok = sum(1 for s in stages if s["status"] == "success")
+        if not stages:
+            status = "partial" if written else "failed"
+        elif ok == len(stages):
+            status = "success"
+        elif ok == 0:
+            status = "failed"
+        else:
+            status = "partial"
+        entry = upsert_round(
+            date, status=status, trigger="cron", stages=stages,
+            finished_at=rounds_now(), state_dir=state_dir,
+        )
+        summary["round"] = {
+            "status": status,
+            "stages_ok": ok,
+            "stages_total": len(stages),
+            "recorded": bool(entry),
+        }
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not break finishing
+        logger.warning("Failed to record round state: %s", exc)
 
     if notify:
         try:

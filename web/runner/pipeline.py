@@ -114,24 +114,22 @@ def _deserialize(data: dict) -> dict:
 
 
 def _persist(state: dict) -> None:
-    """Write one round state to disk (atomic, capped history). Never raises."""
+    """Write one round state to disk (atomic, capped history). Never raises.
+
+    Delegates to ``core.rounds`` so cron-driven rounds recorded by the CLI
+    live in the same file and the Rounds page shows both.
+    """
     try:
-        with _persist_lock:
-            data: dict = {}
-            if os.path.isfile(_STATE_FILE):
-                try:
-                    with open(_STATE_FILE, "r", encoding="utf-8") as fh:
-                        data = json.load(fh) or {}
-                except (json.JSONDecodeError, OSError):
-                    data = {}
-            data[state["date"]] = _serialize(state)
-            for key in sorted(data.keys(), reverse=True)[_KEEP_ROUNDS:]:
-                data.pop(key, None)
-            os.makedirs(os.path.dirname(_STATE_FILE), exist_ok=True)
-            tmp = _STATE_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(data, fh, ensure_ascii=False, indent=1)
-            os.replace(tmp, _STATE_FILE)
+        from core.rounds import upsert_round
+
+        upsert_round(
+            state["date"],
+            status=state["status"],
+            trigger=state.get("trigger", ""),
+            stages=_serialize(state)["stages"],
+            started_at=state.get("started_at"),
+            finished_at=state.get("finished_at"),
+        )
     except Exception as exc:  # noqa: BLE001 - persistence must never break runs
         logger.warning("Failed to persist round state: %s", exc)
 
@@ -143,23 +141,21 @@ def load_persisted_rounds() -> int:
     'interrupted'. Returns the number of rounds loaded.
     """
     try:
-        with open(_STATE_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh) or {}
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        from core.rounds import list_rounds, mark_interrupted
+
+        mark_interrupted()
+        persisted = list_rounds()
+    except Exception as exc:  # noqa: BLE001 - never block startup
+        logger.warning("Failed to load persisted rounds: %s", exc)
         return 0
 
     with _lock:
-        for date, payload in data.items():
-            if date in _rounds:
+        for payload in persisted:
+            date = payload.get("date")
+            if not date or date in _rounds:
                 continue
-            state = _deserialize(payload)
-            if state["status"] == "running":
-                state["status"] = "interrupted"
-                for stage in state["stages"].values():
-                    if stage.get("status") in ("running", "queued", "pending"):
-                        stage["status"] = "interrupted"
-            _rounds[date] = state
-    return len(data)
+            _rounds[date] = _deserialize(payload)
+    return len(persisted)
 
 
 # ---------------------------------------------------------------------------

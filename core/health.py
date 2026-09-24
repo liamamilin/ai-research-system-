@@ -127,42 +127,51 @@ def _vector_coverage(state_dir: str) -> dict:
             except sqlite3.Error:
                 return _check("vector_coverage", WARN, "vector index not built yet")
             total = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+            orphan = conn.execute(
+                "SELECT COUNT(*) FROM chunk_meta m WHERE NOT EXISTS"
+                " (SELECT 1 FROM reports r WHERE r.path = m.path)"
+            ).fetchone()[0]
         finally:
             conn.close()
     except sqlite3.Error as exc:
         return _check("vector_coverage", ERROR, f"{type(exc).__name__}: {exc}")
 
-    missing = total - embedded
-    if missing == 0:
-        return _check("vector_coverage", OK, f"{embedded}/{total} reports embedded")
-    return _check("vector_coverage", WARN,
-                  f"{missing}/{total} reports lack vectors (QA falls back to FTS)",
-                  missing=missing)
+    missing = max(0, total - embedded)
+    base = {"missing": missing, "orphan_vectors": orphan}
+    if missing == 0 and not orphan:
+        return _check("vector_coverage", OK, f"{embedded}/{total} reports embedded", **base)
+    detail = f"{embedded}/{total} reports embedded"
+    if missing:
+        detail += f"; {missing} lack vectors (QA falls back to FTS)"
+    if orphan:
+        detail += f"; {orphan} orphaned vector documents (run reindex to prune)"
+    return _check("vector_coverage", WARN, detail, **base)
 
 
 def _last_round(state_dir: str) -> dict:
     path = os.path.join(state_dir, "pipeline_rounds.json")
     if not os.path.isfile(path):
         return _check("last_round", WARN, "no pipeline round recorded")
-    import json
+    from core import rounds
 
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError) as exc:
-        return _check("last_round", ERROR, f"unreadable: {exc}")
-
-    rounds = data if isinstance(data, list) else (data.get("rounds") or [])
-    if not rounds:
-        return _check("last_round", WARN, "no rounds")
-    latest = rounds[-1]
+    latest = rounds.latest_round(state_dir)
+    if not latest:
+        return _check("last_round", WARN, "no pipeline round recorded")
     status = latest.get("status", "unknown")
-    when = latest.get("started_at") or latest.get("finished_at") or ""
+    when = latest.get("finished_at") or latest.get("started_at") or ""
+    trigger = latest.get("trigger", "")
+    stages = latest.get("stages") or []
+    failed = [s for s in stages if s.get("status") in ("failed", "missing", "interrupted")]
+    detail = f"{status} at {when or 'unknown'}"
+    if trigger:
+        detail += f" via {trigger}"
+    if failed:
+        detail += f"; {len(failed)}/{len(stages)} stages failed"
     entry_status = OK if status == "success" else (
-        WARN if status in ("running", "pending") else ERROR
+        WARN if status in ("running", "pending", "partial") else ERROR
     )
-    return _check("last_round", entry_status, f"{status} at {when or 'unknown'}",
-                  round_status=status)
+    return _check("last_round", entry_status, detail,
+                  round_status=status, failed_stages=len(failed), total_stages=len(stages))
 
 
 def run_checks(state_dir: str = "state", output_dir: str = "output",

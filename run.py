@@ -55,6 +55,8 @@ Templates: copy from jobs/_templates/ to create new jobs""",
                         "(exit 1 when exceeded and block_pipeline is on)")
     p.add_argument("--test-notify", action="store_true",
                    help="Send a test notification to every configured channel")
+    p.add_argument("--round-start", nargs="?", const=True, default=False,
+                   help="Mark a pipeline round as started (date = today by default)")
     p.add_argument("--round-finish", nargs="?", const=True, default=False,
                    metavar="DATE",
                    help="Export artifacts, sync tracking and send the digest "
@@ -165,6 +167,15 @@ def main():
             print("  ✗ monthly budget exceeded — blocking")
             sys.exit(1)
         sys.exit(0)
+
+    if args.round_start is not False:
+        from core.rounds import upsert_round
+
+        date = (args.round_start if isinstance(args.round_start, str)
+                else datetime.now().strftime("%Y-%m-%d"))
+        entry = upsert_round(date, status="running", trigger="cron")
+        print(f"  ✓ round {date} marked running (trigger=cron)")
+        sys.exit(0 if entry else 1)
 
     if args.round_finish is not False:
         from core.round_finish import finish_round

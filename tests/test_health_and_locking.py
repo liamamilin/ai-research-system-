@@ -44,9 +44,11 @@ def env(tmp_path):
     conn.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
     conn.commit()
     conn.close()
+    # Real on-disk shape: a date-keyed mapping (shared with the web runner).
     (state / "pipeline_rounds.json").write_text(
-        json.dumps({"rounds": [{"date": "2026-09-24", "status": "success",
-                                "started_at": "2026-09-24T06:00:00"}]}),
+        json.dumps({"2026-09-24": {"date": "2026-09-24", "status": "success",
+                                   "trigger": "cron", "started_at": "2026-09-24T06:00:00",
+                                   "finished_at": "2026-09-24T06:10:00", "stages": []}}),
         encoding="utf-8",
     )
     return {"state": str(state), "output": str(output), "config": str(config)}
@@ -138,20 +140,45 @@ def test_index_freshness_warns_on_lag(env):
     assert check["missing"] == 22  # 25 new files minus the 3 pre-indexed reports
 
 
+def _write_rounds(env, payload) -> None:
+    with open(os.path.join(env["state"], "pipeline_rounds.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+
 def test_last_round_reads_status(env):
-    path = os.path.join(env["state"], "pipeline_rounds.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"rounds": [{"date": "2026-09-24", "status": "success",
-                               "started_at": "2026-09-24T06:00:00"}]}, f)
-    assert _by_name(_run(env), "last_round")["status"] == "ok"
+    _write_rounds(env, {
+        "2026-09-24": {"date": "2026-09-24", "status": "success", "trigger": "cron",
+                       "started_at": "2026-09-24T06:00:00", "stages": []},
+    })
+    check = _by_name(_run(env), "last_round")
+    assert check["status"] == "ok"
+    assert "via cron" in check["detail"]
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"rounds": [{"date": "2026-09-25", "status": "failed"}]}, f)
-    assert _by_name(_run(env), "last_round")["status"] == "error"
+    _write_rounds(env, {
+        "2026-09-25": {"date": "2026-09-25", "status": "failed", "trigger": "web",
+                       "stages": [{"key": "P0", "status": "failed"},
+                                  {"key": "P1", "status": "success"}]},
+        "2026-09-24": {"date": "2026-09-24", "status": "success", "stages": []},
+    })
+    check = _by_name(_run(env), "last_round")
+    assert check["status"] == "error"
+    assert check["failed_stages"] == 1
+    assert check["total_stages"] == 2
+    assert "1/2 stages failed" in check["detail"]
 
-    with open(path, "w", encoding="utf-8") as f:
+
+def test_last_round_uses_latest_date(env):
+    _write_rounds(env, {
+        "2026-01-01": {"date": "2026-01-01", "status": "failed", "stages": []},
+        "2026-09-24": {"date": "2026-09-24", "status": "success", "stages": []},
+    })
+    assert _by_name(_run(env), "last_round")["round_status"] == "success"
+
+
+def test_last_round_corrupt_file_is_error(env):
+    with open(os.path.join(env["state"], "pipeline_rounds.json"), "w", encoding="utf-8") as f:
         f.write("{not json")
-    assert _by_name(_run(env), "last_round")["status"] == "error"
+    assert _by_name(_run(env), "last_round")["status"] == "warn"
 
 
 def test_stale_locks_detection(env):
