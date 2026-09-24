@@ -389,10 +389,16 @@ class ResearchEngine:
             from . import events
 
             events.use_state_dir(os.path.join(self.workspace_dir, "state"))
-            return events.register_report(
+            counts = events.register_report(
                 job_name, self._now().strftime("%Y-%m-%d"), content,
                 round_date=self._round_date_from_path(output_path),
             )
+            if counts.get("clustered"):
+                logger.info(
+                    "event memory: %s new source(s), %s folded into known events",
+                    counts.get("new", 0), counts["clustered"],
+                )
+            return counts
         except Exception as exc:  # noqa: BLE001 - bookkeeping must not break runs
             logger.debug("event registration skipped: %s", exc)
             return None

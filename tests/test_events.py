@@ -29,7 +29,7 @@ REPORT = """| 发现 | 影响 | 证据来源 |
 
 def test_register_report_records_urls(events_db):
     result = events.register_report("daily", "2026-09-24", REPORT)
-    assert result == {"new": 2, "repeat": 0, "total": 2}
+    assert result == {"new": 2, "repeat": 0, "total": 2, "clustered": 0}
     stored = events.recent_events(days=3650)
     assert {e["host"] for e in stored} == {"ai.google.dev", "anthropic.com"}
 
@@ -47,7 +47,8 @@ def test_next_round_counts_repeats(events_db):
     result = events.register_report("daily", "2026-09-25", REPORT, round_date="2026-09-25")
     assert result["new"] == 0
     assert result["repeat"] == 2
-    assert events.round_counts("2026-09-25") == {"total": 2, "new": 0, "repeat": 2}
+    assert events.round_counts("2026-09-25") == {
+        "total": 2, "new": 0, "repeat": 2, "clustered": 0}
     assert events.round_counts("2026-09-24")["new"] == 2
 
 
@@ -109,7 +110,8 @@ def test_recent_events_window(events_db):
 
 
 def test_register_empty_report(events_db):
-    assert events.register_report("d", "2026-09-24", "") == {"new": 0, "repeat": 0, "total": 0}
+    assert events.register_report("d", "2026-09-24", "") == {
+        "new": 0, "repeat": 0, "total": 0, "clustered": 0}
 
 
 def test_engine_injects_reported_events(tmp_path, events_db, monkeypatch):
