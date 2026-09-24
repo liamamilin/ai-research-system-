@@ -698,6 +698,55 @@ def _sse_format(event: dict) -> str:
     return "\n".join(lines) + "\n\n"
 
 
+@router.post("/{name:path}/validate", response_model=dict)
+def validate_yaml(
+    name: str,
+    payload: JobYamlUpdate,
+    user=Depends(require_editor),
+):
+    """Check a job's YAML without saving it.
+
+    The editor needs to know that a document is broken *before* it overwrites
+    the file that a production run depends on. Same validators as the save
+    path, so a green result here means the save will not be rejected.
+    """
+    settings = get_settings()
+    if not load_job(settings.paths.jobs_dir, name):
+        # Same contract as the save path: a name that does not resolve must not
+        # report "valid" and then fail on save.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ApiError.make("job_not_found", f"未找到 job: {name}"),
+        )
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    try:
+        parsed = yaml_io.parse_yaml(payload.yaml_content)
+    except ValueError as exc:
+        parsed = None
+        errors.append(str(exc))
+    if not parsed:
+        if not errors:
+            errors.append("YAML 为空或不是映射结构")
+        return {"ok": False, "errors": errors, "warnings": warnings}
+
+    errors.extend(yaml_io.validate_output_path(
+        parsed, output_root=os.path.join(settings.paths.output_dir)))
+    try:
+        warnings = yaml_io.validate_yaml(parsed)
+    except Exception as exc:  # noqa: BLE001 - a linter crash is not a save blocker
+        warnings = [f"校验器异常，已跳过风格检查: {type(exc).__name__}"]
+
+    # A job must still be runnable by the engine, not merely parseable.
+    if not str(parsed.get("prompt") or "").strip():
+        errors.append("prompt 为空：该 job 无法生成报告")
+    if not str(parsed.get("name") or "").strip():
+        warnings.append("缺少 name 字段，将回退到文件名")
+
+    return {"ok": not errors, "errors": errors, "warnings": warnings}
+
+
 @router.put("/{name:path}", response_model=dict)
 def update_yaml(
     name: str,

@@ -3,6 +3,19 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { JobDetailPage } from "./JobDetail";
+import { useAuthStore } from "@/lib/auth-store";
+
+// CodeMirror does not render a usable editor in jsdom; the YAML preflight and
+// the unsaved-changes guard are what these tests are about.
+vi.mock("@/components/YamlEditor", () => ({
+  YamlEditor: ({ value, onChange }: { value: string; onChange?: (v: string) => void }) => (
+    <textarea
+      aria-label="yaml"
+      value={value}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
+}));
 
 const JOB = {
   name: "research/demo",
@@ -64,11 +77,14 @@ const PERSISTED = {
   live: false,
 };
 
-function mockApi(overrides: { logs?: unknown; job?: unknown } = {}) {
+function mockApi(overrides: { logs?: unknown; job?: unknown; validation?: unknown } = {}) {
   const calls: string[] = [];
   const fn = vi.fn(async (url: string) => {
     const path = String(url);
     calls.push(path);
+    if (path.includes("/validate")) {
+      return jsonResponse(overrides.validation ?? { ok: true, errors: [], warnings: [] });
+    }
     if (path.includes("/stream")) {
       return new Response("", { status: 200, headers: { "content-type": "text/event-stream" } });
     }
@@ -152,5 +168,81 @@ describe("JobDetail persisted logs", () => {
     await waitFor(() => {
       expect(calls.filter((c) => c.includes("/logs")).length).toBeGreaterThan(before);
     });
+  });
+});
+
+describe("JobDetail YAML preflight", () => {
+  beforeEach(() => {
+    // Preflight and the unsaved-changes guard are editor-only behaviour.
+    useAuthStore.setState({ user: { username: "e", role: "editor" } as never });
+  });
+
+  it("shows blocking errors before the user attempts a save", async () => {
+    mockApi({
+      validation: {
+        ok: false,
+        errors: ["YAML 解析失败: 第 2 行", "prompt 为空：该 job 无法生成报告"],
+        warnings: [],
+      },
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("YAML 配置")).toBeTruthy());
+    fireEvent.click(screen.getByText("YAML 配置"));
+
+    const editor = await screen.findByLabelText("yaml");
+    fireEvent.change(editor, { target: { value: "name: [broken" } });
+
+    expect(await screen.findByText(/保存会被拒绝/, undefined, { timeout: 3000 })).toBeTruthy();
+    expect(screen.getByText("YAML 解析失败: 第 2 行")).toBeTruthy();
+    expect(screen.getByText("prompt 为空：该 job 无法生成报告")).toBeTruthy();
+  });
+
+  it("confirms a clean document", async () => {
+    mockApi({ validation: { ok: true, errors: [], warnings: ["keywords 建议至少 3 个"] } });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("YAML 配置")).toBeTruthy());
+    fireEvent.click(screen.getByText("YAML 配置"));
+
+    const editor = await screen.findByLabelText("yaml");
+    // must differ from the loaded document, otherwise there is nothing to check
+    fireEvent.change(editor, { target: { value: 'name: "demo2"\nprompt: "x"\n' } });
+
+    // the preflight is debounced
+    expect(await screen.findByText(/预检通过/, undefined, { timeout: 3000 })).toBeTruthy();
+    expect(screen.getByText(/keywords 建议至少 3 个/)).toBeTruthy();
+  });
+
+  it("does not validate before anything is edited", async () => {
+    const calls = mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByText("YAML 配置")).toBeTruthy());
+    fireEvent.click(screen.getByText("YAML 配置"));
+    await screen.findByLabelText("yaml");
+    expect(calls.some((c) => c.includes("/validate"))).toBe(false);
+  });
+
+  it("blocks leaving the YAML tab with unsaved edits", async () => {
+    mockApi();
+    renderPage();
+    await waitFor(() => expect(screen.getByText("YAML 配置")).toBeTruthy());
+    fireEvent.click(screen.getByText("YAML 配置"));
+
+    const editor = await screen.findByLabelText("yaml");
+    fireEvent.change(editor, { target: { value: "name: unsaved" } });
+    fireEvent.click(screen.getByText("日志"));
+
+    expect(await screen.findByText(/有未保存的修改，离开会丢失/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText("继续编辑"));
+    expect(screen.queryByText(/有未保存的修改，离开会丢失/)).toBeNull();
+    // the inline "unsaved" badge stays: the edit is still there
+    expect(screen.getByText("有未保存的修改")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("日志"));
+    fireEvent.click(await screen.findByText("放弃修改并离开"));
+    // back on the overview tab, and the edit was discarded
+    await waitFor(() => expect(screen.queryByLabelText("yaml")).toBeNull());
+    expect(screen.queryByText(/有未保存的修改，离开会丢失/)).toBeNull();
+    expect(screen.queryByText("有未保存的修改")).toBeNull();
   });
 });

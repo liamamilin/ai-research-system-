@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
 import { useParams, Link } from "react-router-dom";
-import { getJob, updateJobYaml, runJob, cancelJob, getJobHistory } from "@/api";
+import { getJob, updateJobYaml, validateJobYaml, runJob, cancelJob, getJobHistory, type JobYamlValidation } from "@/api";
 import { ApiError } from "@/api/client";
 import type { JobDetail as JobDetailType } from "@/api/types";
 import { useAuthStore } from "@/lib/auth-store";
@@ -41,6 +41,9 @@ export function JobDetailPage() {
   const [originalYaml, setOriginalYaml] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [validation, setValidation] = useState<JobYamlValidation | null>(null);
+  const [validating, setValidating] = useState(false);
+  const [discardPrompt, setDiscardPrompt] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [lastSaveResult, setLastSaveResult] = useState("");
 
@@ -155,6 +158,45 @@ export function JobDetailPage() {
     }
   };
 
+  // Preflight while typing: the same validators the save uses, so a broken
+  // document is visible before it can overwrite the file a run depends on.
+  useEffect(() => {
+    if (!name || !job || !canEdit || editYaml === originalYaml || !editYaml.trim()) {
+      setValidation(null);
+      return;
+    }
+    let cancelled = false;
+    setValidating(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const result = await validateJobYaml(decodeURIComponent(name), editYaml);
+        if (!cancelled) setValidation(result);
+      } catch (err: unknown) {
+        if (!cancelled) {
+          setValidation({
+            ok: false,
+            errors: [err instanceof Error ? err.message : "校验请求失败"],
+            warnings: [],
+          });
+        }
+      } finally {
+        if (!cancelled) setValidating(false);
+      }
+    }, 700);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [editYaml, originalYaml, name, job, canEdit]);
+
+  const requestTab = (next: Tab) => {
+    if (tab === "yaml" && next !== "yaml" && hasChanges && canEdit) {
+      setDiscardPrompt(true);
+      return;
+    }
+    setTab(next);
+  };
+
   const handleSave = async () => {
     if (!name || !job || !hasChanges) return;
     setSaving(true);
@@ -168,6 +210,7 @@ export function JobDetailPage() {
         job.yaml_mtime
       );
       setOriginalYaml(editYaml);
+      setValidation(null);
       setWarnings(result.warnings || []);
       setLastSaveResult("保存成功");
       fetchJob();
@@ -270,7 +313,7 @@ export function JobDetailPage() {
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => requestTab(t.key)}
             className={cn(
               "px-4 py-2 text-sm border-b-2 transition",
               tab === t.key
@@ -386,6 +429,43 @@ export function JobDetailPage() {
 
           {saveError && (
             <div className="text-sm text-danger bg-red-900/20 px-3 py-2 rounded-md">{saveError}</div>
+          )}
+
+          {validation && !validation.ok && (
+            <div role="alert" className="text-sm text-danger bg-red-900/20 px-3 py-2 rounded-md space-y-1">
+              <div>保存会被拒绝，先修这些问题：</div>
+              <ul className="list-disc pl-5 space-y-0.5">
+                {validation.errors.map((e) => <li key={e}>{e}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {validation && validation.ok && (
+            <div className="text-xs text-success bg-green-900/10 px-3 py-2 rounded-md">
+              预检通过，可以保存
+              {validation.warnings.length > 0 && (
+                <span className="text-warning">（{validation.warnings.length} 条提示：{validation.warnings.join("；")}）</span>
+              )}
+            </div>
+          )}
+
+          {validating && (
+            <div className="text-xs text-text-muted">预检中…</div>
+          )}
+
+          {discardPrompt && (
+            <div role="alert" className="rounded-md border border-warning/50 bg-amber-900/10 px-3 py-2 space-y-2">
+              <div className="text-sm text-warning">YAML 有未保存的修改，离开会丢失。</div>
+              <div className="flex gap-2">
+                <button className="btn text-xs" onClick={() => setDiscardPrompt(false)}>继续编辑</button>
+                <button className="btn btn-danger text-xs" onClick={() => {
+                  setDiscardPrompt(false);
+                  setValidation(null);
+                  setEditYaml(originalYaml);
+                  setTab("overview");
+                }}>放弃修改并离开</button>
+              </div>
+            </div>
           )}
           {lastSaveResult && (
             <div className="text-sm text-success bg-green-900/20 px-3 py-2 rounded-md">{lastSaveResult}</div>

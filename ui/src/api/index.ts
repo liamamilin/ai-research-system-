@@ -36,6 +36,20 @@ export async function getJobState(name: string): Promise<JobDetail["state"]> {
   return api(`/api/jobs/${encodeURIComponent(name)}/state`);
 }
 
+export interface JobYamlValidation {
+  ok: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+/** Preflight a job YAML edit without saving it. */
+export async function validateJobYaml(name: string, yamlContent: string): Promise<JobYamlValidation> {
+  return api(`/api/jobs/${encodeURIComponent(name)}/validate`, {
+    method: "POST",
+    body: { yaml_content: yamlContent },
+  });
+}
+
 export async function updateJobYaml(
   name: string,
   yamlContent: string,
