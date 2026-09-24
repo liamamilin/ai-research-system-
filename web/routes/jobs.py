@@ -526,6 +526,23 @@ def run_job(name: str, request: Request, user=Depends(require_editor)):
             detail=ApiError.make("already_running", f"Job '{name}' 正在运行中"),
         )
 
+    # Budget guard applies to ad-hoc runs too, not just matrix rounds
+    try:
+        from core.budget import month_spend, run_allowed
+        from core.config import load_system_config
+
+        allowed, reason = run_allowed(
+            month_spend(load_system_config(settings.paths.config_dir)), "该 Job")
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=ApiError.make("budget_exceeded", reason),
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - never block a run on config issues
+        logger.warning("Budget check skipped: %s", exc)
+
     task = start_job(
         job_name=name,
         started_by=user["username"],

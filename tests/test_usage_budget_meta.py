@@ -88,9 +88,11 @@ def test_estimate_cost():
 def test_month_spend_and_block(monkeypatch):
     monkeypatch.setattr(
         StateManager, "get_usage_summary",
-        staticmethod(lambda days: {"totals": {"prompt_tokens": 10_000_000,
-                                              "completion_tokens": 0,
-                                              "total_tokens": 10_000_000}}),
+        staticmethod(lambda days=30, since=None, until=None: {
+            "totals": {"prompt_tokens": 10_000_000, "completion_tokens": 0,
+                       "total_tokens": 10_000_000},
+            "per_user": [],
+        }),
     )
     cfg = {
         "ai": {"pricing": {"input_per_1m": 1.0, "output_per_1m": 1.0}},
@@ -118,3 +120,78 @@ def test_pipeline_guard_wired(monkeypatch):
         raise AssertionError("round started despite budget")
     except RuntimeError as exc:
         assert "budget exceeded" in str(exc)
+
+
+def test_month_spend_uses_calendar_month_window(monkeypatch):
+    """The guard must count this calendar month only, not a rolling N days."""
+    from datetime import datetime
+
+    captured: dict = {}
+
+    def fake_summary(days=30, since=None, until=None):
+        captured["days"] = days
+        captured["since"] = since
+        return {"totals": {"prompt_tokens": 0, "completion_tokens": 0,
+                           "total_tokens": 0}, "per_user": []}
+
+    monkeypatch.setattr(StateManager, "get_usage_summary", staticmethod(fake_summary))
+    budget.month_spend({"ai": {}, "budget": {}})
+    assert captured["days"] == 0
+    assert captured["since"] == datetime.now().strftime("%Y-%m-01T00:00:00")
+
+
+def test_run_allowed_blocks_single_jobs_when_exceeded():
+    status = {"limit": 5.0, "spent": 6.0, "ratio": 1.2, "warn": True,
+              "exceeded": True, "block_pipeline": True}
+    allowed, reason = budget.run_allowed(status, "该 Job")
+    assert allowed is False
+    assert "该 Job" in reason
+
+    status["block_pipeline"] = False
+    assert budget.run_allowed(status, "该 Job")[0] is True
+
+    status.update({"spent": 1.0, "exceeded": False})
+    assert budget.run_allowed(status, "该 Job") == (True, "")
+
+
+def test_usage_records_user_and_external_entries(tmp_path, monkeypatch):
+    from core import state as state_mod
+
+    monkeypatch.setattr(state_mod, "_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(state_mod, "_HISTORY_DIR", str(tmp_path / "state" / "history"))
+
+    state_mod.StateManager.update("job-a", "success", usage={"total_tokens": 100},
+                                 user="alice")
+    state_mod.StateManager.record_usage("qa", "bob", {"total_tokens": 50,
+                                                      "prompt_tokens": 30,
+                                                      "completion_tokens": 20})
+
+    summary = state_mod.StateManager.get_usage_summary(days=0)
+    assert summary["totals"]["total_tokens"] == 150
+    users = {u["user"]: u["total_tokens"] for u in summary["per_user"]}
+    assert users == {"alice": 100, "bob": 50}
+    jobs = {j["job_name"] for j in summary["per_job"]}
+    assert jobs == {"job-a", "__qa__"}
+
+
+def test_usage_since_filter_excludes_older(tmp_path, monkeypatch):
+    from core import state as state_mod
+
+    monkeypatch.setattr(state_mod, "_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(state_mod, "_HISTORY_DIR", str(tmp_path / "state" / "history"))
+    state_mod.StateManager.update("old", "success", usage={"total_tokens": 10},
+                                  user="alice")
+    assert state_mod.StateManager.get_usage_summary(days=0)["totals"]["total_tokens"] == 10
+    future = "2999-01-01T00:00:00"
+    assert state_mod.StateManager.get_usage_summary(
+        days=0, since=future)["totals"]["total_tokens"] == 0
+
+
+def test_qa_usage_is_persisted(tmp_path, monkeypatch):
+    """Q&A spend must be attributed, not invisible."""
+    from core import state as state_mod
+
+    monkeypatch.setattr(state_mod, "_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(state_mod, "_HISTORY_DIR", str(tmp_path / "state" / "history"))
+    state_mod.StateManager.record_usage("qa", "carol", None)
+    assert state_mod.StateManager.get_usage_summary(days=0)["totals"]["runs"] == 0

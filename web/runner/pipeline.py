@@ -465,6 +465,7 @@ def _run_round(state: dict, config_dir: str, jobs_dir: str, concurrency: int,
                     engine_stub = ResearchEngine(
                         config_dir=config_dir, jobs_dir=jobs_dir,
                         workspace_dir=workspace_dir,
+                        user=state.get("trigger") or "pipeline",
                     )
                     task = registry.start(job_name, "pipeline", engine_stub)
                     future = pool.submit(

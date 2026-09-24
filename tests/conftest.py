@@ -83,6 +83,12 @@ def web_env(tmp_path, monkeypatch, _password_hashes):
                         str(tmp_path / "state" / "reports.db"))
     index_db.init_db()
 
+    # Keep usage/history writes inside the tmp state dir: the QA route records
+    # LLM usage, and without this every test would append to the real
+    # state/history/__usage__.jsonl.
+    from core import state as core_state
+    core_state.use_state_dir(str(tmp_path / "state"))
+
     users: dict[str, dict] = {}
     for username, role, password in (
         ("admin", "admin", "admin-pass-123"),

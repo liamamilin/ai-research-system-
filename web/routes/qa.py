@@ -73,6 +73,15 @@ def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le
         details={"question": question[:120], "hits": len(hits)},
         ip=request.client.host if request.client else None,
     )
+    try:
+        from core.state import StateManager
+
+        StateManager.use_state_dir(get_settings().paths.state_dir)
+        StateManager.record_usage(
+            "qa", user["username"], result.get("usage") or None)
+    except Exception:  # noqa: BLE001 - usage accounting is optional
+        pass
+
     return {
         "answer": result["answer"],
         "citations": result["citations"],

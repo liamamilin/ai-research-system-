@@ -23,15 +23,23 @@ def get_ratings(user=Depends(require_viewer)):
 @router.get("")
 def get_usage(
     days: int = Query(30, ge=0, le=3650),
+    month: bool = Query(False, description="restrict to the current calendar month"),
     user=Depends(require_viewer),
 ):
-    """Return token usage totals plus per-day/job/model breakdowns.
+    """Return token usage totals plus per-day/job/model/user breakdowns.
 
     ``estimated_cost_usd`` is computed when ``ai.pricing`` is configured in
     system.yaml (``input_per_1m`` / ``output_per_1m``).
     """
     settings = get_settings()
-    summary = StateManager.get_usage_summary(days=days)
+    since = None
+    if month:
+        import datetime as _dt
+
+        since = _dt.datetime.now().replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        ).strftime("%Y-%m-%dT%H:%M:%S")
+    summary = StateManager.get_usage_summary(days=0 if month else days, since=since)
 
     sys_cfg = load_system_config(settings.paths.config_dir)
     pricing = (sys_cfg.get("ai") or {}).get("pricing") or {}

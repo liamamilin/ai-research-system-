@@ -141,6 +141,20 @@ def upsert_report(
             )
 
 
+def prune_missing(output_dir: str) -> int:
+    """Drop index rows whose report file no longer exists on disk.
+
+    Reconciliation pass: filesystem watchers can coalesce or miss delete
+    events, and a stale row would surface a report the user cannot open.
+    """
+    with connect() as conn:
+        paths = [r["path"] for r in conn.execute("SELECT path FROM reports")]
+    stale = [p for p in paths if not os.path.isfile(os.path.join(output_dir, p))]
+    for path in stale:
+        remove_report(path)
+    return len(stale)
+
+
 def remove_report(path: str):
     """Delete a report entry."""
     with connect() as conn:

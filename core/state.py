@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 
 _STATE_DIR = "state"
 _HISTORY_DIR = "state/history"
+USAGE_FILE_NAME = "__usage__.jsonl"
+
+
+def use_state_dir(state_dir: str) -> None:
+    """Point state and history writes at ``<state_dir>``."""
+    global _STATE_DIR, _HISTORY_DIR
+    _STATE_DIR = state_dir
+    _HISTORY_DIR = os.path.join(state_dir, "history")
 
 
 def _job_state_path(job_name: str) -> str:
@@ -56,6 +64,7 @@ class StateManager:
         error: Optional[str] = None,
         duration_seconds: Optional[float] = None,
         usage: Optional[dict] = None,
+        user: Optional[str] = None,
     ):
         """Record the result of a job run and append to history.
 
@@ -88,7 +97,8 @@ class StateManager:
                                     output_path=output_path,
                                     error=error,
                                     duration_seconds=duration_seconds,
-                                    usage=usage)
+                                    usage=usage,
+                                    user=user)
 
     @staticmethod
     def get(job_name: str) -> Optional[dict]:
@@ -110,6 +120,7 @@ class StateManager:
         error: Optional[str] = None,
         duration_seconds: Optional[float] = None,
         usage: Optional[dict] = None,
+        user: Optional[str] = None,
     ):
         """Append a run record to the history file (append-only JSONL)."""
         _ensure_history_dir()
@@ -117,6 +128,7 @@ class StateManager:
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "job_name": job_name,
+            "user": user or "",
             "status": status,
             "output_path": output_path,
             "error": error,
@@ -148,15 +160,37 @@ class StateManager:
         return result
 
     @staticmethod
-    def get_usage_summary(days: int = 30) -> dict:
-        """Aggregate token usage from all job history files.
+    def record_usage(kind: str, user: Optional[str], usage: Optional[dict]) -> None:
+        """Record LLM usage for non-job activity (Q&A, reindex, API calls)."""
+        if not usage:
+            return
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "job_name": f"__{kind}__",
+            "user": user or "",
+            "status": "success",
+            "usage": usage,
+        }
+        try:
+            _ensure_history_dir()
+            path = os.path.join(_HISTORY_DIR, USAGE_FILE_NAME)
+            with file_lock(path):
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except (OSError, TimeoutError) as exc:
+            logger.debug("usage record skipped: %s", exc)
 
-        Returns totals plus per-day / per-job / per-model breakdowns for runs
-        within the last ``days`` days (0 = all time).
+    @staticmethod
+    def get_usage_summary(days: int = 30, since: Optional[str] = None,
+                          until: Optional[str] = None) -> dict:
+        """Aggregate token usage from job history plus external usage records.
+
+        ``since``/``until`` (ISO timestamps) take precedence over ``days`` so
+        calendar-month windows do not silently include the previous month.
         """
         _ensure_history_dir()
-        cutoff = ""
-        if days > 0:
+        cutoff = since or ""
+        if not cutoff and days > 0:
             cutoff = time.strftime(
                 "%Y-%m-%dT%H:%M:%S%z",
                 time.localtime(time.time() - days * 86400),
@@ -173,12 +207,16 @@ class StateManager:
         per_day: dict = {}
         per_job: dict = {}
         per_model: dict = {}
+        per_user: dict = {}
 
+        sources: list[tuple[str, str]] = []
         for fn in sorted(os.listdir(_HISTORY_DIR)):
-            if not fn.endswith(".jsonl"):
-                continue
+            if fn.endswith(".jsonl"):
+                fallback = "unknown" if fn == USAGE_FILE_NAME else fn.rsplit(".", 1)[0]
+                sources.append((os.path.join(_HISTORY_DIR, fn), fallback))
+        for file_path, fallback_name in sources:
             try:
-                with open(os.path.join(_HISTORY_DIR, fn), "r", encoding="utf-8") as f:
+                with open(file_path, "r", encoding="utf-8") as f:
                     lines = f.readlines()
             except OSError:
                 continue
@@ -193,6 +231,8 @@ class StateManager:
                     continue
                 ts = str(entry.get("ts", ""))
                 if cutoff and ts < cutoff:
+                    continue
+                if until and ts > until:
                     continue
 
                 totals["runs"] += 1
@@ -214,7 +254,7 @@ class StateManager:
                 for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     day_slot[key] += int(usage.get(key) or 0)
 
-                job_name = entry.get("job_name", fn.rsplit(".", 1)[0])
+                job_name = entry.get("job_name") or fallback_name
                 job_slot = per_job.setdefault(
                     job_name,
                     {"job_name": job_name, "runs": 0, "total_tokens": 0},
@@ -232,14 +272,25 @@ class StateManager:
                 for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     model_slot[key] += int(usage.get(key) or 0)
 
+                user = str(entry.get("user") or "") or "unknown"
+                user_slot = per_user.setdefault(
+                    user, {"user": user, "runs": 0, "total_tokens": 0, "searches": 0})
+                user_slot["runs"] += 1
+                user_slot["total_tokens"] += int(usage.get("total_tokens") or 0)
+                user_slot["searches"] += int(usage.get("searches") or 0)
+
         return {
             "days": days,
+            "since": cutoff,
+            "until": until or "",
             "totals": totals,
             "per_day": sorted(per_day.values(), key=lambda d: d["day"]),
             "per_job": sorted(per_job.values(),
                               key=lambda j: j["total_tokens"], reverse=True),
             "per_model": sorted(per_model.values(),
                                 key=lambda m: m["total_tokens"], reverse=True),
+            "per_user": sorted(per_user.values(),
+                               key=lambda u: u["total_tokens"], reverse=True),
         }
 
     @staticmethod

@@ -33,7 +33,8 @@ class ResearchEngine:
     def __init__(self, config_dir: str = "config", jobs_dir: str = "jobs",
                  cancel_token: Optional[threading.Event] = None,
                  progress_cb=None, workspace_dir: Optional[str] = None,
-                 date_override: Optional[str] = None):
+                 date_override: Optional[str] = None,
+                 user: Optional[str] = None):
         self.config_dir = config_dir
         self.jobs_dir = jobs_dir
         self.sys = load_system_config(config_dir)
@@ -41,6 +42,7 @@ class ResearchEngine:
         self._progress = progress_cb or (lambda _: None)
         self.workspace_dir = os.path.abspath(workspace_dir or os.getcwd())
         self._date_override = date_override
+        self.user = user or ""
 
     def _now(self) -> datetime:
         """Current time, with the date replaced by date_override when set.
@@ -168,6 +170,7 @@ class ResearchEngine:
                     StateManager.update(job_name, "failed",
                                         error="Model returned no content",
                                         usage=usage,
+                                        user=self.user,
                                         duration_seconds=round(
                                             time.time() - start_time, 1))
                     self._notify("failed", f"Job 失败: {job_name}",
@@ -203,6 +206,7 @@ class ResearchEngine:
                 StateManager.update(job_name, "success",
                                     output_path=output_path,
                                     usage=usage,
+                                    user=self.user,
                                     duration_seconds=round(elapsed, 1))
                 tokens = (usage or {}).get("total_tokens")
                 self._notify(
@@ -231,6 +235,7 @@ class ResearchEngine:
                                 output_path=output_path,
                                 error="Cancelled by user",
                                 usage=usage,
+                                user=self.user,
                                 duration_seconds=round(elapsed, 1))
             self._notify("cancelled", f"Job 取消: {job_name}",
                          f"运行 {round(elapsed, 1)}s 后被取消",

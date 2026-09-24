@@ -48,8 +48,12 @@ def month_spend(sys_config: Optional[dict] = None) -> dict:
     limit = float(cfg.get("monthly_usd_limit", 0) or 0)
     warn_ratio = float(cfg.get("warn_ratio", 0.8) or 0.8)
 
-    days = max(1, datetime.now().day)
-    summary = StateManager.get_usage_summary(days=days)
+    # Calendar month-to-date. A rolling "days" window silently included the
+    # previous month (e.g. on the 24th it counted the last 24 days).
+    now = datetime.now()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    summary = StateManager.get_usage_summary(
+        days=0, since=month_start.strftime("%Y-%m-%dT%H:%M:%S"))
     pricing = (sys_config.get("ai") or {}).get("pricing") or {}
     spent = _estimate_cost(summary["totals"], pricing)
 
@@ -64,18 +68,29 @@ def month_spend(sys_config: Optional[dict] = None) -> dict:
         "tokens": summary["totals"].get("total_tokens", 0),
         "has_pricing": (pricing.get("input_per_1m") is not None
                         or pricing.get("output_per_1m") is not None),
+        "window_start": month_start.strftime("%Y-%m-%d"),
+        "per_user": summary.get("per_user", []),
+        "runs": summary["totals"].get("runs_with_usage", 0),
     }
 
 
 def pipeline_allowed(sys_config: Optional[dict] = None) -> tuple[bool, str]:
     """Whether a pipeline round may start. Returns (allowed, reason)."""
     status = month_spend(sys_config)
+    return run_allowed(status, "轮次")
+
+
+def run_allowed(status: dict, what: str = "任务") -> tuple[bool, str]:
+    """Shared gate for rounds and single jobs."""
     if status["limit"] <= 0 or not status["exceeded"]:
+        if status["warn"]:
+            logger.warning("Monthly budget at %.0f%% (%.2f/%.2f USD)",
+                           status["ratio"] * 100, status["spent"], status["limit"])
         return True, ""
     if not status["block_pipeline"]:
         logger.warning("Monthly budget exceeded (%.2f/%.2f USD) but "
                        "block_pipeline is disabled", status["spent"], status["limit"])
         return True, ""
     reason = (f"月度预算已用完（${status['spent']:.2f}/${status['limit']:.2f}），"
-              f"已阻止运行轮次。请调整 budget.monthly_usd_limit 或充值")
+              f"已阻止运行{what}。请调整 budget.monthly_usd_limit 或充值")
     return False, reason

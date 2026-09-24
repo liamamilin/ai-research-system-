@@ -14,11 +14,30 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 logger = logging.getLogger("ai_research.web.indexer")
 
 MARKDOWN_EXT = (".md", ".mdx")
+
+
+def _relative_path(change_path: str, output_dir: str) -> Optional[str]:
+    """Path of a change relative to the watched root, or None when outside.
+
+    Both sides are resolved with ``realpath``: watchers report canonical paths
+    (e.g. macOS ``/private/var/...`` for ``/var/...``), so a plain relpath would
+    escape the root and every event would be discarded.
+    """
+    try:
+        root = os.path.realpath(output_dir)
+        target = os.path.realpath(change_path)
+        rel = os.path.relpath(target, root)
+    except (OSError, ValueError):
+        return None
+    if rel == "." or rel.startswith(".."):
+        return None
+    return rel
 
 
 def _handle_change(change_type, change_path: str, output_dir: str) -> bool:
@@ -32,8 +51,8 @@ def _handle_change(change_type, change_path: str, output_dir: str) -> bool:
     from web.indexer import vector_sync
     from watchfiles import Change
 
-    rel = os.path.relpath(change_path, output_dir)
-    if rel.startswith(".."):
+    rel = _relative_path(change_path, output_dir)
+    if rel is None:
         return False
 
     if change_type in (Change.added, Change.modified):
@@ -59,6 +78,7 @@ def start_watcher(
     on_change: Optional[Callable[[], None]] = None,
     poll_delay_ms: int = 2000,
     stop_event: Optional[threading.Event] = None,
+    reconcile_seconds: int = 300,
 ) -> threading.Thread:
     """Start a background thread watching output_dir for file changes.
 
@@ -69,6 +89,7 @@ def start_watcher(
         on_change: Optional callback invoked after each batch of changes.
         poll_delay_ms: Filesystem poll delay handed to watchfiles.
         stop_event: Set this to stop the watcher (used by tests and shutdown).
+        reconcile_seconds: How often to drop index rows whose file vanished.
 
     Returns:
         The background thread (daemon=True).
@@ -79,8 +100,22 @@ def start_watcher(
         logger.warning("watchfiles not installed; incremental indexing disabled")
         return threading.Thread(target=lambda: None, daemon=True)
 
+    def _reconcile() -> None:
+        """Self-heal missed delete events."""
+        from web.indexer import db as index_db
+        from web.indexer import vector_sync
+
+        try:
+            removed = index_db.prune_missing(output_dir)
+            if removed:
+                logger.info("Reconciled %d stale report index row(s)", removed)
+                vector_sync.prune_orphans(output_dir)
+        except Exception as exc:  # noqa: BLE001 - never kill the watcher
+            logger.warning("Index reconciliation failed: %s", exc)
+
     def _watch():
         logger.info("Starting file watcher for: %s", output_dir)
+        next_reconcile = time.time() + reconcile_seconds
         try:
             for changes in watch(
                 output_dir,
@@ -101,6 +136,10 @@ def start_watcher(
                         on_change()
                     except Exception:  # noqa: BLE001 - callback must not kill us
                         logger.warning("on_change callback failed", exc_info=True)
+
+                if time.time() >= next_reconcile:
+                    next_reconcile = time.time() + reconcile_seconds
+                    _reconcile()
         except Exception as exc:  # noqa: BLE001 - surface watcher death
             logger.error("File watcher stopped: %s", exc)
 

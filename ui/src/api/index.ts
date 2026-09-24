@@ -318,6 +318,7 @@ export interface UsageSummary {
   per_model: { model: string; runs: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }[];
   estimated_cost_usd: number | null;
   pricing: { input_per_1m?: number | null; output_per_1m?: number | null };
+  per_user?: { user: string; runs: number; total_tokens: number; searches: number }[];
   budget?: {
     limit: number;
     spent: number;
@@ -327,11 +328,13 @@ export interface UsageSummary {
     block_pipeline: boolean;
     tokens: number;
     has_pricing: boolean;
+    window_start?: string;
+    per_user?: { user: string; runs: number; total_tokens: number; searches: number }[];
   };
 }
 
-export async function getUsage(days = 30): Promise<UsageSummary> {
-  return api("/api/usage", { query: { days } });
+export async function getUsage(days = 30, month = false): Promise<UsageSummary> {
+  return api("/api/usage", { query: month ? { month: "true" } : { days } });
 }
 
 export interface RatingSummary {

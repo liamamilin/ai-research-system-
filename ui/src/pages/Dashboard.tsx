@@ -113,7 +113,7 @@ export function DashboardPage() {
         ))}
       </div>
 
-      {usage?.budget && usage.budget.limit > 0 && (
+      {usage?.budget && (
         <div className={cn("card px-4 py-3 space-y-2",
           usage.budget.exceeded && "border-danger/60")}>
           <div className="flex items-center gap-2 text-xs">
@@ -138,6 +138,24 @@ export function DashboardPage() {
               style={{ width: `${Math.min(100, usage.budget.ratio * 100).toFixed(1)}%` }}
             />
           </div>
+          {usage.budget.limit <= 0 && (
+            <div className="text-[11px] text-text-muted">
+              未设置预算上限（budget.monthly_usd_limit = 0 表示不限制）
+              {usage.budget.has_pricing ? ` · 本月已用 $${usage.budget.spent.toFixed(2)}` : " · 未配置 ai.pricing，无法估算金额"}
+            </div>
+          )}
+          {(usage.budget.per_user?.length ?? 0) > 0 && (
+            <div className="text-[11px] text-text-muted space-y-0.5">
+              <div>本月用量归属（自 {usage.budget.window_start} 起）：</div>
+              <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+                {usage.budget.per_user!.slice(0, 5).map((u) => (
+                  <span key={u.user} className="font-mono">
+                    {u.user} · {formatTokens(u.total_tokens)} tok · {u.runs} 次
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

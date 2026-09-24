@@ -58,6 +58,7 @@ def run_job_in_thread(task: RunningTask, config_dir: str, jobs_dir: str,
         cancel_token=task.cancel_token,
         progress_cb=progress_cb,
         date_override=date_override,
+        user=task.started_by,
     )
 
     # Attach handler to the ROOT logger to capture core/engine log output
