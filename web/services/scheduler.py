@@ -335,19 +335,24 @@ def _pipeline_evidence(command: str, state_dir: str, repo_dir: str) -> Optional[
     try:
         from core import rounds
 
-        for round_row in reversed(rounds.list_rounds(state_dir)):
+        # list_rounds is newest-first, but ordering is not what decides the
+        # winner: comparing timestamps does, so a registry that gains entries
+        # out of order (a backfill, a manual retry) still reports the real run.
+        for round_row in rounds.list_rounds(state_dir)[:8]:
             finished = round_row.get("finished_at") or round_row.get("started_at")
             if not finished:
                 continue
             signals.append({"source": "pipeline_rounds", "at": finished,
                             "kind": "round",
                             "round": round_row.get("round_date") or round_row.get("date")})
-            break
     except Exception:  # noqa: BLE001 - evidence gathering must not fail health
         pass
     if not signals:
         return None
-    newest = max(signals, key=lambda s: s["at"])
+    # Copy before attaching the full list: the newest signal is itself a member
+    # of `signals`, so assigning it in place builds a cycle and any JSON
+    # encoder walking the result recurses forever.
+    newest = dict(max(signals, key=lambda s: _sort_key(s["at"])))
     newest["all_signals"] = signals
     return newest
 
@@ -367,17 +372,44 @@ def _evidence_for(job: dict, state_dir: str, repo_dir: str) -> Optional[dict]:
     return None
 
 
+def _as_aware(moment: "datetime") -> "datetime":
+    """Naive timestamps are local time; make everything comparable.
+
+    The round registry writes "+0800" while a log mtime is converted with
+    isoformat(); mixing naive and aware datetimes raises at the first compare.
+    """
+    return moment.astimezone() if moment.tzinfo is None else moment
+
+
+def _sort_key(value: str) -> float:
+    """Comparable epoch for a timestamp; unparseable values sort oldest."""
+    parsed = _parse_iso(value)
+    if parsed is None:
+        return 0.0
+    if parsed.tzinfo is None:
+        parsed = parsed.astimezone()
+    return parsed.timestamp()
+
+
 def _parse_iso(value: str) -> Optional["datetime"]:
-    try:
-        return datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
+    """Parse a timestamp; strftime's %z gives "+0800", fromisoformat wants "+08:00"."""
+    text = str(value or "").strip()
+    candidates = [text]
+    match = re.search(r"([+-]\d{2})(\d{2})$", text)
+    if match:
+        candidates.append(text[:match.start()] + match.group(1) + ":" + match.group(2))
+    for candidate in candidates:
+        try:
+            return datetime.fromisoformat(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def classify_jobs(jobs: list[dict], state_dir: str = "state",
                   repo_dir: str = ".", now: Optional["datetime"] = None) -> list[dict]:
     """Classify every cron job: ok / paused / overdue / unverified / no_schedule."""
-    moment = now or datetime.now()
+    moment = _as_aware(now or datetime.now())
     results: list[dict] = []
     for job in jobs:
         entry = job
@@ -389,6 +421,8 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             "command": (job.get("command") or "")[:160],
         }
         expected = last_fire_before(entry, moment)
+        if expected is not None:
+            expected = _as_aware(expected)
         result["last_expected_at"] = expected.isoformat(timespec="seconds") if expected else ""
         if not job.get("enabled"):
             result["status"] = "paused"
@@ -407,6 +441,8 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             results.append(result)
             continue
         ran_at = _parse_iso(evidence["at"])
+        if ran_at is not None:
+            ran_at = _as_aware(ran_at)
         if ran_at is None:
             result["status"] = "unverified"
             result["detail"] = "运行证据时间无法解析"

@@ -186,3 +186,59 @@ def test_schedule_health_survives_an_unreadable_crontab(monkeypatch, tmp_path):
     report = scheduler.schedule_health(state_dir=str(tmp_path))
     assert report["status"] == "unknown"
     assert report["jobs"] == []
+
+
+def test_pipeline_evidence_is_json_serializable(tmp_path):
+    """Regression: the evidence dict used to contain itself.
+
+    ``newest["all_signals"] = signals`` assigned the same object that was
+    already a member of ``signals``, so FastAPI's encoder recursed until the
+    stack blew and /api/health/detailed returned 500.
+    """
+    import json
+
+    state = tmp_path / "state"
+    state.mkdir()
+    _round(str(state), "2026-09-24T18:24:16+0800")
+
+    evidence = scheduler._pipeline_evidence(
+        "bash scripts/run_practical_intelligence.sh", str(state), str(tmp_path))
+
+    assert evidence is not None
+    encoded = json.dumps(evidence)  # must not recurse
+    assert "pipeline_rounds" in encoded
+    # And the nested list must not point back at its own member
+    assert all(item is not evidence for item in evidence["all_signals"])
+
+
+def test_latest_round_wins_regardless_of_registry_order(tmp_path):
+    """The newest run decides, not the first entry the registry returns."""
+    import json
+    import os
+
+    state = tmp_path / "state"
+    state.mkdir()
+    # An older round keyed by a *later* date: ordering by key would pick it.
+    with open(os.path.join(state, "pipeline_rounds.json"), "w", encoding="utf-8") as fh:
+        json.dump({
+            "2026-09-24": {"date": "2026-09-24", "finished_at": "2026-09-24T18:24:16+0800"},
+            "2026-09-19": {"date": "2026-09-19", "finished_at": "2026-09-20T12:43:04"},
+        }, fh)
+
+    evidence = scheduler._pipeline_evidence(
+        "bash scripts/run_practical_intelligence.sh", str(state), str(tmp_path))
+    assert evidence["at"].startswith("2026-09-24")
+
+
+def test_timestamps_with_and_without_offsets_compare(tmp_path):
+    """A log mtime and a round timestamp must be comparable."""
+    state = tmp_path / "state"
+    state.mkdir()
+    _round(str(state), "2026-09-24T18:24:16+0800")
+
+    result = scheduler.classify_jobs(
+        [DAILY_6AM], state_dir=str(state), repo_dir=str(tmp_path),
+        now=datetime(2026, 9, 24, 20, 0))[0]
+
+    assert result["status"] == "ok"
+    assert result["last_ran_at"].startswith("2026-09-24")
