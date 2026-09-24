@@ -5,6 +5,8 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowLeft, Download, Copy, List, Star, Tag, Share2, Mail, FileCode } from "lucide-react";
 import { cn, formatTokens } from "@/lib/utils";
+import { useAuthStore } from "@/lib/auth-store";
+import { errorMessage, useToast } from "@/lib/toast";
 
 interface Heading {
   level: number;
@@ -70,6 +72,9 @@ export function ReportViewPage() {
   const [activeId, setActiveId] = useState("");
   const [indexMeta, setIndexMeta] = useState<any>(null);
   const [notice, setNotice] = useState("");
+  const user = useAuthStore((s) => s.user);
+  const canEdit = user?.role === "editor" || user?.role === "admin";
+  const toast = useToast();
   const [busyAction, setBusyAction] = useState("");
 
   const fetchContent = useCallback(async () => {
@@ -85,15 +90,19 @@ export function ReportViewPage() {
       setContent(data.content);
       setMeta((data as any).meta || null);
       setIndexMeta((data as any).index || null);
-      updateReportMeta(path, { read: true })
-        .then((row) => setIndexMeta(row))
-        .catch(() => {});
+      if (canEdit) {
+        updateReportMeta(path, { read: true })
+          .then((row) => setIndexMeta(row))
+          .catch((err: unknown) => {
+            toast.warning("未能标记为已读", errorMessage(err));
+          });
+      }
     } catch (err: any) {
       setError(err.message || "加载失败");
     } finally {
       setLoading(false);
     }
-  }, [path]);
+  }, [path, canEdit, toast]);
 
   const runAction = async (key: string, fn: () => Promise<void>) => {
     setBusyAction(key);
@@ -127,8 +136,18 @@ export function ReportViewPage() {
   const handleShare = () => runAction("share", async () => {
     const link = await createShareLink(path);
     const full = window.location.origin + link.url;
-    await navigator.clipboard.writeText(full).catch(() => {});
-    setNotice("分享链接已复制（7 天有效，未登录可只读访问）");
+    let copied = false;
+    try {
+      await navigator.clipboard.writeText(full);
+      copied = true;
+    } catch {
+      toast.error("链接已生成，但复制失败", "浏览器拒绝了剪贴板访问，请手动复制：" + full);
+    }
+    setNotice(
+      copied
+        ? "分享链接已复制（7 天有效，未登录可只读访问）"
+        : "分享链接已生成（7 天有效），请手动复制上方地址"
+    );
   });
 
   const handleSetRating = (value: number) => runAction("rating", async () => {
@@ -209,6 +228,7 @@ export function ReportViewPage() {
             目录
           </button>
         )}
+        {canEdit && (
         <span className="flex items-center gap-0.5" title="报告评分（点击设置，再点取消）">
           {[1, 2, 3, 4, 5].map((value) => (
             <button
@@ -225,6 +245,9 @@ export function ReportViewPage() {
             </button>
           ))}
         </span>
+        )}
+        {canEdit && (
+        <>
         <button onClick={handleToggleFavorite} disabled={!!busyAction}
                 className="btn text-xs" title="星标">
           <Star className={cn("w-3 h-3", indexMeta?.favorite && "fill-current text-warning")} />
@@ -238,14 +261,18 @@ export function ReportViewPage() {
           <Share2 className="w-3 h-3" />
           {busyAction === "share" ? "生成中..." : "分享"}
         </button>
+        </>
+        )}
         <button onClick={handleExportHtml} className="btn text-xs" title="导出 HTML">
           <FileCode className="w-3 h-3" />
           HTML
         </button>
-        <button onClick={handleEmail} disabled={!!busyAction} className="btn text-xs" title="邮件发送">
-          <Mail className="w-3 h-3" />
-          {busyAction === "email" ? "发送中..." : "邮件"}
-        </button>
+        {canEdit && (
+          <button onClick={handleEmail} disabled={!!busyAction} className="btn text-xs" title="邮件发送">
+            <Mail className="w-3 h-3" />
+            {busyAction === "email" ? "发送中..." : "邮件"}
+          </button>
+        )}
         <button onClick={handleCopy} className="btn text-xs" title="复制原文">
           <Copy className="w-3 h-3" />
           {copied ? "已复制" : "复制"}

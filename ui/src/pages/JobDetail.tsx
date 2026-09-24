@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { ArrowLeft, Play, Square } from "lucide-react";
 import { useLogStream, type LogEvent } from "@/hooks/useLogStream";
 import { getJobLogs, type PersistedLogRecord, type PersistedRun } from "@/api";
+import { errorMessage, useToast } from "@/lib/toast";
 
 const YamlEditor = lazy(() => import("@/components/YamlEditor").then(m => ({ default: m.YamlEditor })));
 
@@ -45,6 +46,7 @@ export function JobDetailPage() {
 
   const canEdit = user?.role === "editor" || user?.role === "admin";
   const hasChanges = editYaml !== originalYaml;
+  const toast = useToast();
 
   // SSE log stream (enabled when we have a running task and are on logs tab, or after trigger)
   const decodedName = name ? decodeURIComponent(name) : "";
@@ -147,8 +149,9 @@ export function JobDetailPage() {
     if (!name) return;
     try {
       await cancelJob(decodeURIComponent(name));
-    } catch {
-      // ignore
+      toast.info("已请求停止", "任务会在当前步骤结束后中止");
+    } catch (err: unknown) {
+      toast.error("停止失败", errorMessage(err));
     }
   };
 

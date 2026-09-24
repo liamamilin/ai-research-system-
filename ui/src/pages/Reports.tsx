@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { listReports, getReportTree, searchReports, getReportCategories, listTags, updateReportMeta } from "@/api";
 import { cn, formatTokens } from "@/lib/utils";
+import { ErrorState, RoleGate } from "@/components/ErrorState";
+import { errorMessage, useToast } from "@/lib/toast";
 import { Search, FileText, FolderOpen, Star } from "lucide-react";
 
 const UI_STATE_KEY = "ai-research-console:reports-ui";
@@ -144,6 +146,8 @@ export function ReportsPage() {
   const [searchTotal, setSearchTotal] = useState(0);
   const [searching, setSearching] = useState(false);
 
+  const [error, setError] = useState("");
+  const toast = useToast();
   const [category, setCategory] = useState("");
   const [categories, setCategories] = useState<string[]>([]);
   const [scope, setScope] = useState<"all" | "fav" | "unread">("all");
@@ -171,7 +175,9 @@ export function ReportsPage() {
       setReports(data.items);
       setTotal(data.total);
       setPages(data.pages);
-    } catch {
+      setError("");
+    } catch (err: unknown) {
+      setError(errorMessage(err, "无法加载报告列表"));
       setReports([]);
     } finally {
       setLoading(false);
@@ -188,7 +194,9 @@ export function ReportsPage() {
       setTree(treeData);
       setCategories(cats);
       setTags(tagData.tags || []);
-    } catch {
+      setError("");
+    } catch (err: unknown) {
+      setError(errorMessage(err, "无法加载目录与分类"));
       setTree([]);
       setCategories([]);
     }
@@ -213,8 +221,9 @@ export function ReportsPage() {
     try {
       await updateReportMeta(item.path, { favorite: next });
       if (scope === "fav" && !next) fetchReports(page, category, scope);
-    } catch {
+    } catch (err: unknown) {
       setReports((prev) => prev.map((r) => (r.path === item.path ? { ...r, favorite: !next } : r)));
+      toast.error("星标未保存", errorMessage(err));
     }
   };
 
@@ -377,6 +386,12 @@ export function ReportsPage() {
 
           {loading || searching ? (
             <div className="text-sm text-text-muted">加载中...</div>
+          ) : error ? (
+            <ErrorState
+              error={error}
+              onRetry={() => fetchReports(page, category, scope, tag)}
+              empty="没有报告"
+            />
           ) : displayResults.length === 0 ? (
             <div className="card p-6 text-center text-text-muted text-sm">暂无报告</div>
           ) : (
@@ -436,14 +451,17 @@ export function ReportsPage() {
                         {item.snippet && <Snippet html={String(item.snippet)} />}
                       </div>
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); toggleFavorite(item); }}
-                      className="p-1 rounded hover:bg-bg-card transition shrink-0"
-                      title={item.favorite ? "取消星标" : "加星标"}
-                    >
-                      <Star className={cn("w-4 h-4",
-                        item.favorite ? "fill-current text-warning" : "text-text-muted")} />
-                    </button>
+                    <RoleGate roles={["editor", "admin"]}>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleFavorite(item); }}
+                        className="p-1 rounded hover:bg-bg-card transition shrink-0"
+                        title={item.favorite ? "取消星标" : "加星标"}
+                        aria-label={item.favorite ? "取消星标" : "加星标"}
+                      >
+                        <Star className={cn("w-4 h-4",
+                          item.favorite ? "fill-current text-warning" : "text-text-muted")} />
+                      </button>
+                    </RoleGate>
                   </div>
                 </div>
               ))}

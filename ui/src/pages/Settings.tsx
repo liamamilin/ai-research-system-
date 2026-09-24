@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/api/client";
+import { errorMessage } from "@/lib/toast";
+import { ErrorState } from "@/components/ErrorState";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 import { Trash2 } from "lucide-react";
@@ -68,11 +70,13 @@ function UserManagement() {
   const [newUser, setNewUser] = useState({ username: "", password: "", role: "viewer" });
   const [message, setMessage] = useState("");
 
+  const [usersError, setUsersError] = useState("");
+
   const fetchUsers = () => {
     setLoading(true);
     api<any[]>("/api/users")
-      .then(setUsers)
-      .catch(() => {})
+      .then((rows) => { setUsers(rows); setUsersError(""); })
+      .catch((err: unknown) => setUsersError(errorMessage(err, "无法加载用户列表")))
       .finally(() => setLoading(false));
   };
 
@@ -151,6 +155,10 @@ function UserManagement() {
 
       {loading ? (
         <div className="text-sm text-text-muted">加载中...</div>
+      ) : usersError ? (
+        <ErrorState error={usersError} onRetry={fetchUsers} />
+      ) : users.length === 0 ? (
+        <div className="card p-6 text-center text-text-muted text-sm">还没有用户</div>
       ) : (
         <div className="card divide-y divide-border text-sm">
           <div className="px-4 py-2 flex items-center gap-3 text-xs text-text-muted uppercase">
@@ -228,12 +236,13 @@ function UserManagement() {
 function AuditLog() {
   const [entries, setEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [auditError, setAuditError] = useState("");
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
     api<{ entries: any[] }>("/api/audit?limit=500")
-      .then((data) => setEntries(data.entries))
-      .catch(() => {})
+      .then((data) => { setEntries(data.entries); setAuditError(""); })
+      .catch((err: unknown) => setAuditError(errorMessage(err, "无法加载审计日志")))
       .finally(() => setLoading(false));
   }, []);
 
@@ -258,7 +267,9 @@ function AuditLog() {
         <div className="text-sm text-text-muted">加载中...</div>
       ) : visible.length === 0 ? (
         <div className="card p-4 text-center text-text-muted text-sm">
-          {entries.length === 0 ? "暂无审计日志" : "无匹配记录"}
+          {auditError
+            ? `加载失败：${auditError}`
+            : entries.length === 0 ? "暂无审计日志" : "无匹配记录"}
         </div>
       ) : (
         <div className="card overflow-x-auto">
@@ -303,13 +314,16 @@ function GlobalLogs() {
   const [lines, setLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [follow, setFollow] = useState(false);
+  const [linesError, setLinesError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
     const load = () =>
       api<{ lines: string[] }>("/api/logs/global?lines=500")
-        .then((data) => { if (!cancelled) setLines(data.lines); })
-        .catch(() => {})
+        .then((data) => { if (!cancelled) { setLines(data.lines); setLinesError(""); } })
+        .catch((err: unknown) => {
+          if (!cancelled) setLinesError(errorMessage(err, "无法加载全局日志"));
+        })
         .finally(() => { if (!cancelled) setLoading(false); });
     load();
     if (!follow) return () => { cancelled = true; };
@@ -326,7 +340,9 @@ function GlobalLogs() {
       {loading ? (
         <div className="text-sm text-text-muted">加载中...</div>
       ) : lines.length === 0 ? (
-        <div className="card p-4 text-center text-text-muted text-sm">暂无日志</div>
+        <div className="card p-4 text-center text-text-muted text-sm">
+          {linesError ? `加载失败：${linesError}` : "暂无日志"}
+        </div>
       ) : (
         <pre className="card p-3 text-xs font-mono leading-relaxed max-h-[70vh] overflow-y-auto bg-[#0d1117]">
           {lines.map((l, i) => (

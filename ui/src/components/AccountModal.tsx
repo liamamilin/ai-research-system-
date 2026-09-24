@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { changePassword, listMySessions, revokeMySession, logout, listApiTokens, createApiToken, revokeApiToken, type ApiToken } from "@/api";
 import { useAuthStore } from "@/lib/auth-store";
+import { useToast } from "@/lib/toast";
 import { X } from "lucide-react";
 
 interface Session {
@@ -17,6 +18,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const toast = useToast();
   const [err, setErr] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [tokens, setTokens] = useState<ApiToken[]>([]);
@@ -173,7 +175,14 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               <code className="block break-all font-mono">{newToken}</code>
               <button
                 className="btn text-xs"
-                onClick={() => navigator.clipboard.writeText(newToken).catch(() => {})}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(newToken);
+                    toast.success("Token 已复制");
+                  } catch {
+                    toast.error("复制失败", "浏览器拒绝了剪贴板访问，请手动选中上方 Token 复制");
+                  }
+                }}
               >
                 复制
               </button>

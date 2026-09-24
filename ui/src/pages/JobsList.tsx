@@ -5,6 +5,8 @@ import type { JobSummary } from "@/api/types";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, timeAgo } from "@/lib/utils";
 import { TemplateGrid } from "@/components/TemplateGrid";
+import { ErrorState } from "@/components/ErrorState";
+import { errorMessage } from "@/lib/toast";
 import { TemplateLibrary } from "@/components/TemplateLibrary";
 
 function normalizeCategory(value: string): string {
@@ -29,6 +31,7 @@ export function JobsListPage() {
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
+  const [error, setError] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [categories, setCategories] = useState<JobCategory[]>([]);
   const user = useAuthStore((s) => s.user);
@@ -56,8 +59,14 @@ export function JobsListPage() {
 
   const fetchJobs = async () => {
     setLoading(true);
-    try { setJobs(await listJobs()); } catch { }
-    finally { setLoading(false); }
+    setError("");
+    try {
+      setJobs(await listJobs());
+    } catch (err: unknown) {
+      setError(errorMessage(err, "无法加载 Job 列表"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const fetchCategories = async () => {
@@ -324,6 +333,13 @@ export function JobsListPage() {
       {/* Job list */}
       {loading ? (
         <div className="text-sm text-text-muted">加载中...</div>
+      ) : error ? (
+        <ErrorState error={error} onRetry={fetchJobs} />
+      ) : jobs.length === 0 ? (
+        <div className="card p-8 text-center text-sm text-text-muted space-y-2">
+          <div>还没有任何 Job</div>
+          {canEdit && <div className="text-xs">点右上角「+ 新建」，可以从模板库创建第一个 Job。</div>}
+        </div>
       ) : (
         <div className="space-y-4">
           {[...filtered.entries()].map(([cat, items]) => (

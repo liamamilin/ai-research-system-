@@ -23,8 +23,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    await authApi.logout();
+    // Clear local state first: a failed request must not strand the user in a
+    // half-authenticated shell where every page keeps erroring.
     set({ user: null, loading: false });
+    await authApi.logout().catch(() => {});
   },
 
   checkAuth: async () => {

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
+import { ErrorState } from "@/components/ErrorState";
+import { useToast } from "@/lib/toast";
 import { Clock, Trash2, Play, Pause, HelpCircle } from "lucide-react";
 import { CronBuilder } from "@/components/CronBuilder";
 
@@ -25,6 +27,7 @@ interface SchedulableJob {
 }
 
 export function SchedulerPage() {
+  const toast = useToast();
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -53,8 +56,11 @@ export function SchedulerPage() {
     if (!showForm) return;
     api<{ jobs: SchedulableJob[] }>("/api/scheduler/jobs")
       .then((data) => setSchedulable(data.jobs || []))
-      .catch(() => setSchedulable([]));
-  }, [showForm]);
+      .catch(() => {
+        setSchedulable([]);
+        toast.warning("可调度 Job 列表加载失败", "请从命令行或 YAML 模板创建调度任务");
+      });
+  }, [showForm, toast]);
 
   const filteredJobs = schedulable.filter((job) => {
     const q = jobQuery.trim().toLowerCase();
@@ -342,6 +348,8 @@ export function SchedulerPage() {
 
       {loading ? (
         <div className="text-sm text-text-muted">加载中...</div>
+      ) : error ? (
+        <ErrorState error={error} onRetry={fetchJobs} />
       ) : jobs.length === 0 ? (
         <div className="card p-6 text-center text-text-muted text-sm">
           <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
