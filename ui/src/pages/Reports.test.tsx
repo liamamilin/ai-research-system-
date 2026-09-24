@@ -184,3 +184,77 @@ describe("Reports filters", () => {
     expect(await screen.findByText("24")).toBeTruthy();
   });
 });
+
+describe("Reports filter race", () => {
+  it("keeps the newest filter's result when an older response lands last", async () => {
+    // The list endpoint loads every report's meta server-side, so the request
+    // for the previous filter can resolve after the new one. That used to
+    // leave the list showing the old filter while the tree showed the new one.
+    const pending: Array<(value: unknown) => void> = [];
+    const fn = vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path.includes("/api/reports/tree")) {
+        return jsonResponse([
+          { name: "research", type: "dir", count: 1,
+            children: [{ name: "a.md", type: "file", path: "research/a.md", title: "A" }] },
+        ]);
+      }
+      if (path.includes("/api/reports/categories")) return jsonResponse(["research"]);
+      if (path.includes("/api/reports/tags")) return jsonResponse({ tags: [] });
+      if (path.includes("/api/reports")) {
+        return new Promise((resolve) => {
+          pending.push((body) => resolve(jsonResponse(body)));
+        }) as unknown as Response;
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <MemoryRouter initialEntries={["/reports"]}>
+        <Routes><Route path="/reports" element={<ReportsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+    // first list request (default filter) is still in flight
+    fireEvent.change(screen.getByLabelText("按时间筛选"), { target: { value: "30d" } });
+
+    // answer the newest request first, then let the stale one land
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(2));
+    pending[pending.length - 1]({
+      items: [{ path: "research/new.md", title: "新筛选结果" }], total: 1, page: 1, pages: 1,
+    });
+    expect(await screen.findByText("新筛选结果")).toBeTruthy();
+
+    pending[0]({
+      items: [{ path: "research/old.md", title: "旧筛选结果" }], total: 999, page: 1, pages: 50,
+    });
+    await waitFor(() => expect(screen.queryByText("旧筛选结果")).toBeNull());
+    expect(screen.getByText("新筛选结果")).toBeTruthy();
+  });
+
+  it("defaults to today's reports", async () => {
+    const fn = vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path.includes("/api/reports/tree")) return jsonResponse([]);
+      if (path.includes("/api/reports/categories")) return jsonResponse([]);
+      if (path.includes("/api/reports/tags")) return jsonResponse({ tags: [] });
+      if (path.includes("/api/reports")) {
+        return jsonResponse({ items: [{ path: "a.md", title: "今日报告" }], total: 1, page: 1, pages: 1 });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fn);
+
+    render(
+      <MemoryRouter initialEntries={["/reports"]}>
+        <Routes><Route path="/reports" element={<ReportsPage />} /></Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText("今日报告");
+
+    const listCall = fn.mock.calls.map((c) => String(c[0])).find((u) => u.includes("/api/reports?"));
+    expect(listCall).toBeTruthy();
+    expect(listCall).toMatch(/since=\d{4}-\d{2}-\d{2}/);
+    expect((screen.getByLabelText("按时间筛选") as HTMLSelectElement).value).toBe("today");
+  });
+});

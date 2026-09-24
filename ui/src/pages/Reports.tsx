@@ -155,12 +155,18 @@ export function ReportsPage() {
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([]);
   // Time filters key on the report's own date (from its path), not the file
   // mtime: a backfill run would otherwise make June look like today.
-  const [range, setRange] = useState("all");
+  const [range, setRange] = useState("today");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [latestOnly, setLatestOnly] = useState(false);
   const [sort, setSort] = useState<"recent" | "oldest" | "title" | "size" | "coverage">("recent");
   const [showCustom, setShowCustom] = useState(false);
+  // Each filter change fires a list request and a tree request. The list call
+  // loads every report's meta server-side, so it can be slower than the tree
+  // call: without a sequence guard, the previous filter's response lands last
+  // and the list silently shows the old filter while the tree shows the new one.
+  const listSeq = useRef(0);
+  const treeSeq = useRef(0);
 
   const dateBounds = useCallback((): { since?: string; until?: string } => {
     if (customFrom || customTo) return { since: customFrom || undefined, until: customTo || undefined };
@@ -203,6 +209,7 @@ export function ReportsPage() {
   ) => {
     const activeScope = scopeArg ?? scope;
     const activeTag = tagArg ?? tag;
+    const seq = ++listSeq.current;
     setLoading(true);
     try {
       // cat/activeScope/activeTag are the explicit call arguments (used when a
@@ -217,30 +224,35 @@ export function ReportsPage() {
         tag: activeTag || undefined,
         sort,
       });
+      if (seq !== listSeq.current) return;  // a newer filter already answered
       setReports(data.items);
       setTotal(data.total);
       setPages(data.pages);
       setError("");
     } catch (err: unknown) {
+      if (seq !== listSeq.current) return;
       setError(errorMessage(err, "无法加载报告列表"));
       setReports([]);
     } finally {
-      setLoading(false);
+      if (seq === listSeq.current) setLoading(false);
     }
   }, [scope, tag, sort, category, activeFilterParams]);
 
   const fetchTree = useCallback(async () => {
+    const seq = ++treeSeq.current;
     try {
       const [treeData, cats, tagData] = await Promise.all([
         getReportTree(activeFilterParams()),
         getReportCategories(),
         listTags().catch(() => ({ tags: [] })),
       ]);
+      if (seq !== treeSeq.current) return;
       setTree(treeData);
       setCategories(cats);
       setTags(tagData.tags || []);
       setError("");
     } catch (err: unknown) {
+      if (seq !== treeSeq.current) return;
       setError(errorMessage(err, "无法加载目录与分类"));
       setTree([]);
       setCategories([]);
