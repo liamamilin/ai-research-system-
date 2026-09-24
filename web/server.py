@@ -110,6 +110,28 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="AI Research Console", version="0.1.0", lifespan=lifespan)
 
+    @app.middleware("http")
+    async def record_user_activity(request: Request, call_next):
+        """Publish who is using the console, for the launcher's idle watchdog.
+
+        Only authenticated traffic counts, and static assets are skipped: a
+        page load fires a burst of asset requests, which would look like a
+        busy user long after they closed the tab.
+        """
+        response = await call_next(request)
+        try:
+            path = request.url.path
+            if (request.cookies.get("ai_research_access")
+                    and not path.startswith(("/assets", "/api/health"))
+                    and path not in ("/favicon.ico", "/")):
+                from core import activity
+
+                activity.use_state_dir(settings.paths.state_dir)
+                activity.mark_activity()
+        except Exception:  # noqa: BLE001 - telemetry must not affect responses
+            pass
+        return response
+
     # CORS for dev mode
     if settings.cors.enabled:
         app.add_middleware(

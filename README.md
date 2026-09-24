@@ -140,7 +140,10 @@ python scripts/export_round_artifacts.py --all        # every round
 - 服务已在运行 → 直接跳转，不重启服务
 - 再次点击（App 已在 Dock 中）→ 跳转到已在运行的页面（实测 PID 不变）
 - 假死服务（占着端口但不响应）→ 先按 `state/server.pid` 回收旧进程再重启
-- 看门狗：每 60s 检查 `/api/health`，连续 30 分钟无响应则自动关闭 App
+- **闲置自动退出**：30 分钟没有任何页面操作、且当前没有任务在跑 → 自动关闭 App
+  （活动由 Web 服务写入 `state/app_activity.env`：每次登录态请求刷新一次，
+  任务启动/结束时更新运行数。周期调度不受影响——cron 由系统拥有，与本 App 无关）
+- **看门狗**：每 60s 检查 `/api/health`，连续 30 分钟无响应则自动关闭 App
 - 退出 App **不会**停止服务（服务以 nohup 分离运行），下次点击重新接管
 - 服务输出写入 `logs/app_launcher.log`
 

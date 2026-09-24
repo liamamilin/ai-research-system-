@@ -49,6 +49,15 @@ class TaskRegistry:
             cls._instance._lock = threading.Lock()
         return cls._instance
 
+    def _publish_activity(self) -> None:
+        """Tell the launcher a run is in flight so it stays open."""
+        try:
+            from core import activity
+
+            activity.set_running(len(self.all_running()))
+        except Exception:  # noqa: BLE001 - bookkeeping must not break a run
+            pass
+
     def start(self, job_name: str, started_by: str, engine) -> RunningTask:
         """Create and register a new RunningTask."""
         task_id = secrets.token_urlsafe(12)
@@ -68,6 +77,7 @@ class TaskRegistry:
             if prev and prev.is_running:
                 prev.cancel_token.set()
             self._tasks[job_name] = task
+        self._publish_activity()
         return task
 
     def get(self, job_name: str) -> Optional[RunningTask]:
@@ -78,6 +88,7 @@ class TaskRegistry:
     def remove(self, job_name: str):
         with self._lock:
             self._tasks.pop(job_name, None)
+        self._publish_activity()
 
     def cancel(self, job_name: str) -> bool:
         """Cancel a running task. Returns True if a task was cancelled."""

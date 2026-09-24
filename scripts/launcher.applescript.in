@@ -26,9 +26,11 @@ property projectDir : "@PROJECT_DIR@"
 property pythonBin : "@PYTHON_BIN@"
 property logFile : "@LOG_FILE@"
 property startScript : "@START_SCRIPT@"
+property activityFile : "@STATE_DIR@/app_activity.env"
 property lastOk : missing value
-property timeoutMinutes : 30
+property idleMinutes : 30
 property startupMinutes : 30
+property unhealthyMinutes : 30
 property restartsTried : 0
 
 on healthOk()
@@ -106,6 +108,59 @@ on ensureServer()
 	return healthOk()
 end ensureServer
 
+on activityValue(keyText)
+	-- state/app_activity.env is "key=value" per line: AppleScript has no JSON
+	-- parser, and the service writes this file for exactly this consumer.
+	try
+		set f to open for access (POSIX file activityFile)
+		set rawText to read f as «class utf8»
+		close access f
+		set prefix to keyText & "="
+		repeat with aLine in paragraphs of rawText
+			set theLine to contents of aLine
+			if theLine starts with prefix then
+				return text ((length of prefix) + 1) thru -1 of theLine
+			end if
+		end repeat
+	on error
+	end try
+	return ""
+end activityValue
+
+on idleSeconds()
+	-- Seconds since a human last did something, or -1 when unknown.
+	set raw to my activityValue("last_activity")
+	if raw is "" then return -1
+	try
+		-- "YYYY-MM-DD HH:MM:SS" is the one timestamp shape AppleScript's date
+		-- parser accepts in any locale; Unix seconds are unusable here because
+		-- AppleScript integers are 32-bit and the epoch arithmetic overflows.
+		return ((current date) - (date raw))
+	on error
+		return -1
+	end try
+end idleSeconds
+
+on runningJobs()
+	-- How many jobs the service reports as in flight.
+	set raw to my activityValue("running")
+	if raw is "" then return 0
+	try
+		return (raw as integer)
+	on error
+		return 0
+	end try
+end runningJobs
+
+on shouldQuitForIdle()
+	-- The user's rule: nobody has touched it for a while and nothing is
+	-- running, so the app can go. A long research run keeps it alive.
+	if (my runningJobs()) > 0 then return false
+	set idleSec to my idleSeconds()
+	if idleSec < 0 then return false -- unknown activity: stay open rather than guess
+	return idleSec > idleMinutes * 60
+end shouldQuitForIdle
+
 on openBrowser()
 	open location baseUrl & "/"
 end openBrowser
@@ -159,9 +214,15 @@ end reopen
 on idle
 	if healthOk() then
 		set lastOk to current date
-	else if lastOk is not missing value and ((current date) - lastOk) > timeoutMinutes * minutes then
+	else if lastOk is not missing value and ((current date) - lastOk) > unhealthyMinutes * minutes then
 		notifyTimeout()
 		quit
+		return 60
+	end if
+	if healthOk() and my shouldQuitForIdle() then
+		postNotification("长时间无人使用且没有任务运行，AREC 已退出（服务仍在后台运行）")
+		quit
+		return 60
 	end if
 	return 60
 end idle

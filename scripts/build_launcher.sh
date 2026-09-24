@@ -41,6 +41,7 @@ chmod +x "$STARTER"
   -e "s|@PYTHON_BIN@|$PYTHON_BIN|g" \
   -e "s|@LOG_FILE@|$BASE_DIR/logs/app_launcher.log|g" \
   -e "s|@START_SCRIPT@|$STARTER|g" \
+  -e "s|@STATE_DIR@|$BASE_DIR/state|g" \
   "$TEMPLATE" > "$RENDERED"
 
 TARGET="$DEST_DIR/$APP_NAME"

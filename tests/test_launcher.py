@@ -34,7 +34,8 @@ def _template_text() -> str:
 def test_template_declares_every_placeholder_the_builder_substitutes():
     text = _template_text()
     builder = BUILD.read_text(encoding="utf-8")
-    for placeholder in ("@PROJECT_DIR@", "@PYTHON_BIN@", "@LOG_FILE@", "@START_SCRIPT@"):
+    for placeholder in ("@PROJECT_DIR@", "@PYTHON_BIN@", "@LOG_FILE@",
+                        "@START_SCRIPT@", "@STATE_DIR@"):
         assert placeholder in text, f"{placeholder} missing from the template"
         assert placeholder in builder, f"{placeholder} is never substituted"
 
@@ -51,6 +52,7 @@ def test_builder_substitutes_every_placeholder():
         ["/bin/sh", "-c",
          f"sed -e 's|@PROJECT_DIR@|{REPO}|g' -e 's|@PYTHON_BIN@|/bin/python3|g' "
          f"-e 's|@LOG_FILE@|/tmp/x.log|g' -e 's|@START_SCRIPT@|/tmp/s.sh|g' "
+         f"-e 's|@STATE_DIR@|/tmp/state|g' "
          f"{TEMPLATE}"],
         capture_output=True, text=True, check=True,
     ).stdout
@@ -169,3 +171,37 @@ def test_app_bundle_name_is_consistent():
         "README still points at the old bundle name"
     # Notifications are how the launcher talks when something fails.
     assert 'with title "AREC"' in _template_text()
+
+
+def test_idle_watchdog_rules_are_wired():
+    """The app closes on idleness, but never while a job is running."""
+    text = _template_text()
+    assert "property idleMinutes : 30" in text
+    assert "property unhealthyMinutes : 30" in text
+
+    assert "on shouldQuitForIdle" in text
+    body = text[text.index("on shouldQuitForIdle"):text.index("on openBrowser")]
+    # A running job vetoes the quit, whatever the idle time is.
+    assert "runningJobs()) > 0 then return false" in body
+    # Unknown activity must not be guessed into a quit.
+    assert "idleSec < 0 then return false" in body
+    assert "idleSec > idleMinutes * 60" in body
+
+    # And the idle handler consults it after the health check passes.
+    idle_handler = text[text.index("on idle"):]
+    assert "shouldQuitForIdle()" in idle_handler
+    assert "healthOk() and my shouldQuitForIdle()" in idle_handler
+
+
+def test_activity_file_shape_matches_what_python_writes():
+    """The applet and core.activity must agree on the file format."""
+    text = _template_text()
+    assert 'activityValue("last_activity")' in text
+    assert 'activityValue("running")' in text
+    assert "@STATE_DIR@/app_activity.env" in text
+
+    env_module = (REPO / "core" / "activity.py").read_text(encoding="utf-8")
+    assert 'f"last_activity={stamp}\\nrunning={_running}\\n"' in env_module
+    assert 'time.strftime("%Y-%m-%d %H:%M:%S"' in env_module
+    # A Unix epoch would overflow AppleScript's 32-bit integers.
+    assert "last_activity_epoch" not in text

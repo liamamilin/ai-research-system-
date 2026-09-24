@@ -85,6 +85,20 @@ def web_env(tmp_path, monkeypatch, _password_hashes):
                         str(tmp_path / "state" / "reports.db"))
     index_db.init_db()
 
+    # Never read or write the developer's real crontab from a test. Without
+    # this, /api/health/detailed consults the live schedule: enabling the real
+    # pipeline made the suite fail on the machine's own cron state.
+    from web.services import scheduler as scheduler_service
+
+    monkeypatch.setattr(
+        scheduler_service, "_get_crontab",
+        lambda: [
+            "# test scheduler",
+            "# cron_id: test_job",
+            "# 0 6 * * * cd /tmp && bash scripts/run.sh",
+        ],
+    )
+
     # Keep usage/history writes inside the tmp state dir: the QA route records
     # LLM usage, and without this every test would append to the real
     # state/history/__usage__.jsonl.

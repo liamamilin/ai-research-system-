@@ -76,3 +76,17 @@ def test_index_db_override_is_restored_between_tests():
     assert index_db._DB_PATH_OVERRIDE is None or not os.path.isabs(
         str(index_db._DB_PATH_OVERRIDE)) or str(
         index_db._DB_PATH_OVERRIDE).startswith(str(REPO / "tests"))
+
+
+def test_tests_never_touch_the_real_crontab(web_env):
+    """The scheduler reads crontab unless a test overrides it.
+
+    /api/health/detailed consults the live schedule, so an unisolated suite
+    depends on the developer's own cron state — it failed as soon as the real
+    pipeline was enabled.
+    """
+    from web.services import scheduler as scheduler_service
+
+    listed = scheduler_service.list_jobs()
+    for job in listed:
+        assert job.get("id") == "test_job", f"real crontab leaked into tests: {job}"

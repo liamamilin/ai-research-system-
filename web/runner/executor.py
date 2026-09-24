@@ -85,6 +85,13 @@ def run_job_in_thread(task: RunningTask, config_dir: str, jobs_dir: str,
     finally:
         root_logger.removeHandler(handler)
         task.log_bus.write({"type": "status", "status": task.status})
+        # The launcher keeps the window open while runs are in flight.
+        try:
+            from core import activity
+
+            activity.set_running(len(TaskRegistry().all_running()))
+        except Exception:  # noqa: BLE001 - bookkeeping must not break the run
+            pass
 
 
 def start_job(job_name: str, started_by: str,
