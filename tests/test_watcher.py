@@ -287,3 +287,33 @@ def test_reconcile_runs_without_file_events(watcher_env, monkeypatch):
     beat = watcher.read_heartbeat(str(watcher_env.state)) or {}
     assert beat.get("reconciles", 0) >= 1
     assert beat.get("last_reconcile_at")
+
+
+def test_reconcile_prunes_orphan_fts_rows(watcher_env):
+    """Deletes that bypass remove_report leave search hits with no report."""
+    from web.indexer import db as index_db
+
+    _write(watcher_env.output, "research/kept.md", "# kept\n\nbody\n")
+    index_db.upsert_report("research/kept.md", mtime=1.0, title="kept",
+                           content="body")
+    with index_db.connect() as conn:
+        conn.execute("INSERT INTO reports_fts (rowid, title, content)"
+                     " VALUES (4242, 'ghost', 'phantom body')")
+
+    watcher_env.start(watcher, reconcile_seconds=1)
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            with index_db.connect() as conn:
+                left = conn.execute(
+                    "SELECT COUNT(*) FROM reports_fts WHERE rowid NOT IN"
+                    " (SELECT rowid FROM reports)").fetchone()[0]
+            if not left:
+                break
+            time.sleep(0.2)
+    finally:
+        watcher_env.stop()
+
+    assert index_db.prune_fts_orphans() == 0
+    with index_db.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM reports_fts").fetchone()[0] == 1

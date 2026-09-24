@@ -415,3 +415,24 @@ def test_lock_payload_written_atomically(tmp_path, monkeypatch):
     assert payload["pid"] == os.getpid()
     assert ":" in payload["owner_id"]
     mgr.release()
+
+
+def test_index_freshness_flags_orphan_fts_rows(env):
+    """Full-text rows without a report are hits that resolve to nothing."""
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(os.path.join(env["state"], "reports.db"))
+    try:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS reports_fts (title TEXT, content TEXT);
+        """)
+        # A row left behind by a delete that bypassed remove_report.
+        conn.execute("INSERT INTO reports_fts (rowid, title, content) VALUES (999, 'ghost', 'text')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    check = _by_name(_run(env), "index_freshness")
+    assert check["status"] == "warn"
+    assert check["fts_orphans"] == 1
+    assert "orphan full-text" in check["detail"]

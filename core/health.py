@@ -129,6 +129,13 @@ def _index_freshness(output_dir: str, state_dir: str) -> dict:
                 has_stamps = False
             else:
                 has_stamps = True
+            try:
+                fts_total = conn.execute("SELECT COUNT(*) FROM reports_fts").fetchone()[0]
+                fts_orphans = conn.execute(
+                    "SELECT COUNT(*) FROM reports_fts WHERE rowid NOT IN"
+                    " (SELECT rowid FROM reports)").fetchone()[0]
+            except sqlite3.OperationalError:
+                fts_total, fts_orphans = 0, 0
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -145,6 +152,18 @@ def _index_freshness(output_dir: str, state_dir: str) -> dict:
             abs(indexed[path][0] - mtime) > 1.0 or indexed[path][1] != size
         )
     )
+
+    if fts_orphans:
+        # Search hits that resolve to no report: invisible until someone searches.
+        return _check(
+            "index_freshness", WARN,
+            f"{fts_orphans} orphan full-text row(s) (search hits with no report)",
+            stale=len(stale), orphaned=len(orphaned), missing=len(unindexed),
+            fts_orphans=fts_orphans, fts_rows=fts_total,
+            stale_sample=stale[:5], orphaned_sample=orphaned[:5],
+            unindexed_sample=unindexed[:5],
+            indexed=len(indexed), on_disk=len(disk),
+        )
 
     if orphaned or stale:
         detail_parts = []

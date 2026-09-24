@@ -147,8 +147,12 @@ def start_watcher(
 
         try:
             removed = index_db.prune_missing(output_dir)
+            fts_orphans = index_db.prune_fts_orphans()
             if removed:
                 logger.info("Reconciled %d stale report index row(s)", removed)
+            if fts_orphans:
+                logger.info("Reconciled %d orphan full-text row(s)", fts_orphans)
+            if removed or fts_orphans:
                 vector_sync.prune_orphans(output_dir)
         except Exception as exc:  # noqa: BLE001 - never kill the watcher
             logger.warning("Index reconciliation failed: %s", exc)

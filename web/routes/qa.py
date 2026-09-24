@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from core.config import load_system_config
@@ -12,6 +14,8 @@ from web.indexer import db as index_db
 from web.indexer import vectors
 from web.models import ApiError
 from web.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
@@ -74,13 +78,17 @@ def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le
         ip=request.client.host if request.client else None,
     )
     try:
-        from core.state import StateManager
+        from core import state as state_mod
 
-        StateManager.use_state_dir(get_settings().paths.state_dir)
-        StateManager.record_usage(
+        # use_state_dir is a module function, not a StateManager method: calling
+        # it on the class raised AttributeError, and the blanket except below
+        # swallowed it, so every Q&A call recorded no usage at all and the
+        # monthly budget could not see it.
+        state_mod.use_state_dir(get_settings().paths.state_dir)
+        state_mod.StateManager.record_usage(
             "qa", user["username"], result.get("usage") or None)
-    except Exception:  # noqa: BLE001 - usage accounting is optional
-        pass
+    except Exception as exc:  # noqa: BLE001 - accounting must not fail the answer
+        logger.warning("QA usage not recorded: %s", exc)
 
     return {
         "answer": result["answer"],

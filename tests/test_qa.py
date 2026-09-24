@@ -164,3 +164,36 @@ def test_reindex_embeds_reports(client, indexed, monkeypatch):
 
     r2 = client.post("/api/qa/reindex", headers=_csrf(client))
     assert r2.json()["skipped"] == 2
+
+
+def test_qa_records_usage_for_the_budget(client, indexed, monkeypatch):
+    """A Q&A call must land in the usage ledger.
+
+    The route used to call StateManager.use_state_dir(...), which is a module
+    function, not a class method. The AttributeError was swallowed by a blanket
+    except, so every answer returned 200 and recorded nothing — the monthly
+    budget could not see Q&A spending at all.
+    """
+    import json
+    import os
+
+    from web.routes import qa as qa_route
+
+    monkeypatch.setattr(qa_route, "_embed_query", lambda q, cfg: [])
+    fake = FakeLLM(usage={"prompt_tokens": 30, "completion_tokens": 12,
+                          "total_tokens": 42})
+    monkeypatch.setattr(qa_route, "_llm_factory", lambda cfg: (lambda: fake))
+
+    _login(client, "viewer", "viewer-pass-123")
+    r = client.post("/api/qa", json={"question": "alpha"}, headers=_csrf(client))
+    assert r.status_code == 200
+    assert r.json()["usage"]["total_tokens"] == 42
+
+    state_dir = os.path.join(str(indexed), "state")
+    ledger = os.path.join(state_dir, "history", "__usage__.jsonl")
+    assert os.path.isfile(ledger), "no usage ledger written for a successful answer"
+    rows = [json.loads(line) for line in open(ledger, encoding="utf-8") if line.strip()]
+    assert rows, "usage ledger is empty"
+    assert rows[-1]["job_name"] == "__qa__"
+    assert rows[-1]["user"] == "viewer"
+    assert rows[-1]["usage"]["total_tokens"] == 42

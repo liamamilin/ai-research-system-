@@ -180,6 +180,27 @@ def prune_missing(output_dir: str) -> int:
     return len(stale)
 
 
+def prune_fts_orphans() -> int:
+    """Drop FTS rows whose report row is gone.
+
+    FTS rows are keyed by the reports rowid, so a delete that goes through
+    remove_report keeps them in step. Anything that removes rows from `reports`
+    by other means (a manual cleanup, a restored backup, the FTS trigram
+    migration) leaves search hits that resolve to no report at all.
+    """
+    with connect() as conn:
+        try:
+            orphans = [r[0] for r in conn.execute(
+                "SELECT rowid FROM reports_fts"
+                " WHERE rowid NOT IN (SELECT rowid FROM reports)")]
+            for rowid in orphans:
+                conn.execute("DELETE FROM reports_fts WHERE rowid = ?", (rowid,))
+        except sqlite3.OperationalError:
+            # No FTS table yet (fresh database).
+            return 0
+    return len(orphans)
+
+
 def remove_report(path: str):
     """Delete a report entry."""
     with connect() as conn:
