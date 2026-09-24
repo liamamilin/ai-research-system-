@@ -892,16 +892,42 @@ def delete_job(name: str, request: Request, user=Depends(require_editor)):
         if not candidate.startswith(jobs_dir + os.sep):
             continue
         if os.path.isfile(candidate):
-            os.remove(candidate)
             deleted_path = candidate
             break
 
     if not deleted_path:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=ApiError.make("file_not_found", "Job 文件不存在"),
+            detail=ApiError.make("file_missing", "Job 文件不存在"),
+        )
+
+    # Back up before removing. A delete is the one edit here with no undo, and
+    # if the file was never pushed, git is not a safety net either.
+    backup_path = None
+    try:
+        with open(deleted_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        # Absolute: the caller (UI, CLI) need not share the server's cwd.
+        backup_path = os.path.abspath(yaml_io.save_backup(deleted_path, content))
+    except (OSError, ValueError) as exc:
+        # A failed backup must not silently become a failed audit trail.
+        logger.warning("Could not back up %s before delete: %s", rel, exc)
+
+    try:
+        os.remove(deleted_path)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=ApiError.make("delete_failed", f"删除失败: {exc}"),
         )
 
     audit.log("job_delete", user=user["username"], target=rel, result="success",
+              details={"file": os.path.relpath(deleted_path, jobs_dir),
+                       "backup_path": backup_path or "",
+                       "backed_up": bool(backup_path)},
               ip=request.client.host if request.client else None)
-    return {"ok": True, "deleted": os.path.relpath(deleted_path, jobs_dir)}
+    return {
+        "ok": True,
+        "deleted": os.path.relpath(deleted_path, jobs_dir),
+        "backup_path": backup_path,
+    }

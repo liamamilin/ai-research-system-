@@ -125,3 +125,75 @@ def test_editors_can_validate(client, web_env):
     assert client.post(f"/api/jobs/{JOB}/validate",
                        json={"yaml_content": VALID},
                        headers=_headers(client)).status_code == 200
+
+
+# --- delete job ------------------------------------------------------------
+
+JOB_FILE = """name: "Deletable"
+description: "a job"
+prompt: |
+  Track {name}.
+output: "output/{name}_{date}.md"
+"""
+
+
+def _write_job(jobs_dir: str, rel: str = "research/deletable") -> str:
+    target = os.path.join(jobs_dir, rel + ".yaml")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write(JOB_FILE)
+    return rel
+
+
+def test_delete_removes_the_file_and_keeps_a_backup(client, web_env):
+    jobs_dir = os.path.join(str(web_env[0]), "jobs")
+    rel = _write_job(jobs_dir)
+    _login(client)
+
+    r = client.delete(f"/api/jobs/{rel}", headers=_headers(client))
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert not os.path.isfile(os.path.join(jobs_dir, "research", "deletable.yaml"))
+
+    # The point of the backup: a delete the user cannot undo is still recoverable.
+    backup = body.get("backup_path")
+    assert backup, "delete returned no backup path"
+    assert os.path.isabs(backup), f"backup path should be absolute: {backup}"
+    assert os.path.isfile(backup)
+    with open(backup, encoding="utf-8") as fh:
+        assert "Deletable" in fh.read()
+
+
+def test_delete_refuses_while_running(client, web_env):
+    from web.runner.registry import TaskRegistry
+
+    jobs_dir = os.path.join(str(web_env[0]), "jobs")
+    rel = _write_job(jobs_dir)
+    _login(client)
+
+    registry = TaskRegistry()
+    task = registry.start(rel, "admin", engine=None)
+    try:
+        r = client.delete(f"/api/jobs/{rel}", headers=_headers(client))
+        assert r.status_code == 409
+        assert r.json()["error"]["code"] == "already_running"
+        assert os.path.isfile(os.path.join(jobs_dir, "research", "deletable.yaml"))
+    finally:
+        registry.remove(rel)
+        del task
+
+
+def test_delete_unknown_job_is_404(client, web_env):
+    _login(client)
+    r = client.delete("/api/jobs/research/nope", headers=_headers(client))
+    assert r.status_code == 404
+
+
+def test_delete_requires_editor(client, web_env):
+    jobs_dir = os.path.join(str(web_env[0]), "jobs")
+    rel = _write_job(jobs_dir)
+    _login(client, "viewer", "viewer-pass-123")
+    r = client.delete(f"/api/jobs/{rel}", headers=_headers(client))
+    assert r.status_code == 403
+    assert os.path.isfile(os.path.join(jobs_dir, "research", "deletable.yaml"))

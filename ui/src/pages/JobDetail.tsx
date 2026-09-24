@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import { getJob, updateJobYaml, validateJobYaml, runJob, cancelJob, getJobHistory, type JobYamlValidation } from "@/api";
 import { ApiError } from "@/api/client";
 import type { JobDetail as JobDetailType } from "@/api/types";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
-import { ArrowLeft, Play, Square } from "lucide-react";
+import { ArrowLeft, Play, Square, Trash2 } from "lucide-react";
+import { DeleteJobDialog } from "@/components/DeleteJobDialog";
 import { useLogStream, type LogEvent } from "@/hooks/useLogStream";
 import { getJobLogs, type PersistedLogRecord, type PersistedRun } from "@/api";
 import { errorMessage, useToast } from "@/lib/toast";
@@ -41,6 +42,13 @@ export function JobDetailPage() {
   const [originalYaml, setOriginalYaml] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const navigate = useNavigate();
+  // A pipeline stage is referenced by the round dependency graph and by the
+  // cron script: deleting one silently breaks the next scheduled run.
+  const deleteWarnings = (job?.name || "").startsWith("practical_ai_intelligence/")
+    ? ["这是情报流水线的阶段之一，删除后定时任务的下一次运行会在该阶段失败。"]
+    : [];
   const [validation, setValidation] = useState<JobYamlValidation | null>(null);
   const [validating, setValidating] = useState(false);
   const [discardPrompt, setDiscardPrompt] = useState(false);
@@ -274,6 +282,13 @@ export function JobDetailPage() {
 
   return (
     <div className="space-y-4">
+      <DeleteJobDialog
+        jobName={deleting ? decodeURIComponent(name || "") : null}
+        isRunning={isRunning}
+        warnings={deleteWarnings}
+        onDeleted={() => { setDeleting(false); navigate("/jobs"); }}
+        onClose={() => setDeleting(false)}
+      />
       {/* Breadcrumb + actions */}
       <div className="flex items-center gap-2 text-sm">
         <Link to="/jobs" className="text-text-muted hover:text-text">
@@ -286,6 +301,16 @@ export function JobDetailPage() {
         <div className="flex items-center gap-2">
           {runError && (
             <span className="text-xs text-danger">{runError}</span>
+          )}
+          {canEdit && (
+            <button
+              onClick={() => setDeleting(true)}
+              className="btn text-xs"
+              title="删除此 Job 的 YAML 文件"
+            >
+              <Trash2 className="w-3 h-3" />
+              删除
+            </button>
           )}
           {canEdit && isRunning && (
             <button onClick={handleCancel} className="btn btn-danger text-xs" title="取消运行">

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listJobs, createJob, listTemplates, deleteJob, listJobCategories, type JobCategory, type JobTemplate } from "@/api";
+import { DeleteJobDialog } from "@/components/DeleteJobDialog";
+import { listJobs, createJob, listTemplates, listJobCategories, type JobCategory, type JobTemplate } from "@/api";
 import type { JobSummary } from "@/api/types";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, timeAgo } from "@/lib/utils";
@@ -99,15 +100,9 @@ export function JobsListPage() {
     }));
   };
 
-  const handleDelete = async (jobName: string) => {
-    if (!window.confirm(`删除 job '${jobName}' 的 YAML 文件？此操作不可撤销。`)) return;
-    try {
-      await deleteJob(jobName);
-      fetchJobs();
-    } catch (err: any) {
-      window.alert(err?.message || "删除失败");
-    }
-  };
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDelete = (jobName: string) => setDeleting(jobName);
 
   const handleCreate = async () => {
     if (!form.name.trim()) { setCreateMsg("请输入 Job 名称"); return; }
@@ -153,6 +148,12 @@ export function JobsListPage() {
 
   return (
     <div className="space-y-4">
+      <DeleteJobDialog
+        jobName={deleting}
+        isRunning={Boolean(jobs.find((j) => j.name === deleting)?.is_running)}
+        onDeleted={() => { setDeleting(null); fetchJobs(); }}
+        onClose={() => setDeleting(null)}
+      />
       <div className="flex items-center gap-3">
         <h1 className="text-lg font-semibold flex-1">Jobs</h1>
         <input
@@ -377,10 +378,11 @@ export function JobsListPage() {
                     {canEdit && (
                       <button
                         onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDelete(j.name); }}
-                        className="text-text-muted hover:text-danger text-xs px-1 shrink-0"
-                        title="删除 job"
+                        className="text-text-muted hover:text-danger text-xs px-1.5 py-0.5 shrink-0 border border-transparent hover:border-danger/50 rounded"
+                        title={`删除 job ${j.name}`}
+                        aria-label={`删除 job ${j.name}`}
                       >
-                        ✕
+                        删除
                       </button>
                     )}
                     {(j.keywords || []).length > 0 && (

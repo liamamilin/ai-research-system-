@@ -1,0 +1,132 @@
+name: 人工智能
+description: 24 小时窗口的每日速报：Top 10 重要发现 + 影响判断 + 待核实信号 + 明日关注
+enabled: true
+keywords:
+  - 大模型
+  - LLM
+  - 人工智能
+  - AI
+  - 生成式AI
+  - GPT
+  - ChatGPT
+  - Claude
+  - Gemini
+  - DeepSeek
+  - Qwen
+  - GLM
+  - Kimi
+  - MiniMax
+  - Llama
+  - Transformer
+  - 多模态模型
+  - 推理模型
+  - Reasoning Model
+  - Agent
+  - AI Agent
+  - Agent Harness
+  - Coding Agent
+  - Computer Use
+  - Tool Calling
+  - Function Calling
+  - MCP
+  - RAG
+  - 向量数据库
+  - Embedding
+  - Prompt Engineering
+  - Context Engineering
+  - Context Window
+  - Long Context
+  - Fine-tuning
+  - LoRA
+  - RLHF
+  - 对齐
+  - 模型评测
+  - Benchmark
+  - 模型路由
+  - Model Routing
+  - Inference
+  - API
+  - Token
+  - KV Cache
+  - Prompt Cache
+  - 开源模型
+  - 本地模型
+  - Ollama
+  - Hugging Face
+  - AI Coding
+  - Vibe Coding
+  - AI 应用
+  - AI 产品
+  - AI Workflow
+  - Multi-Agent
+  - Subagent
+  - Autonomous Agent
+  - Agentic AI
+  - AI Systems Engineering
+  - LLMOps
+  - Model Serving
+  - AI Infrastructure
+language: zh
+schedule:
+  type: daily
+  time: 08:00
+  timezone: Asia/Shanghai
+runtime:
+  timeout_seconds: 1800
+  skip_if_running: true
+prompt: |-
+  你是 {name} 领域的资深情报分析师。你的读者是一位每天早上花 5 分钟扫读本简报的 AI 技术从业者，需要据此决定当天关注什么。
+
+  ## 任务
+  检索 {date_1d_ago} 至 {date}（24 小时窗口）内与以下关键词相关的公开信息：
+  {keywords}
+
+  输出一份可在 1 分钟内读完的 Markdown 简报，使用语言：{language}（专业术语首次出现时括注英文原词，如"智能体（agent）"）。
+
+  {reported_events}
+
+  ## 证据规则（硬性要求）
+  1. 每条发现必须包含三要素：事件或结论、发布日期（YYYY-MM-DD）、可访问的来源 URL。
+  2. 只收录发布日期落在上述窗口内的信息。窗口内确无实质信息时，直接写"本期无重大更新"并简述已检索的角度，禁止用旧闻凑数。
+  3. 同一事件被多家报道时合并为一条，标注至少 2 个独立来源。来源之间存在冲突时并列陈述并说明分歧点。
+  4. 无法确认日期或来源的传闻、社交媒体传言，归入"待核实信号"并明确标注不确定性。
+
+  ## 输出结构
+  ### 1. 本期速览
+  不超过 120 字，说明本期最重要的 1-2 件事及其对读者的影响。
+
+  ### 2. Top 发现
+  按重要性排序，最多 10 条，使用表格：
+
+  | 重要性 | 事件/结论 | 日期 | 来源 | 一句话影响 |
+  |--------|-----------|------|------|-----------|
+  | ★★★ / ★★ / ★ | ... | YYYY-MM-DD | [链接](URL) | 对谁、在什么场景下产生影响 |
+
+  重要性判定：★★★ = 可能改变行业或团队决策；★★ = 值得跟进；★ = 背景信息。
+
+  ### 3. 关键细节
+  仅对 ★★★ 条目展开，每条 3-5 句：客观事实、关键数据、影响范围与时间尺度。
+
+  ### 4. 风险与不确定性
+  本期信息中未经验证、可能反转、或存在明显利益相关方（厂商、投资者）的部分。
+
+  ### 5. 明日关注
+  3-5 个具体、可跟踪的观察点，写成可验证的命题而非话题。
+
+  ### 6. 来源清单
+  编号列表：标题 | 发布日期 | URL
+
+  ## 质量红线
+  - 禁止编造未证实的信息、数字、日期或 URL。
+  - 禁止"AI 将彻底改变行业"这类无事实支撑的泛论。
+  - 禁止把厂商营销口径当作独立结论。
+  - 禁止超出窗口日期的信息出现在 Top 发现中（历史背景请放入"关键细节"并注明日期）。
+
+  ## 长度约束
+  正文不超过 1500 字；表格之外的全部展开内容不超过 600 字。
+
+  ## 忽略清单
+  - 纯融资、IPO 新闻（除非涉及并购、技术授权、供应关系变化）
+  - 无发布日期的二手转述、内容农场文章
+  - 与关键词仅表面相关的泛行业评论
+output: output/monitoring/{date}_{name}.md

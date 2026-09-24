@@ -529,7 +529,7 @@ export async function revokeMySession(jti: string): Promise<{ ok: boolean }> {
   return api(`/api/auth/sessions/${encodeURIComponent(jti)}`, { method: "DELETE" });
 }
 
-export async function deleteJob(name: string): Promise<{ ok: boolean; deleted: string }> {
+export async function deleteJob(name: string): Promise<{ ok: boolean; deleted: string; backup_path?: string | null }> {
   return api(`/api/jobs/${encodeURIComponent(name)}`, { method: "DELETE" });
 }
 
