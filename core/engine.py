@@ -354,15 +354,27 @@ class ResearchEngine:
     # ------------------------------------------------------------------
 
     def _resolve_output_path(self, job: dict) -> str:
-        """Determine the output file path from job config."""
+        """Determine the output file path from job config.
+
+        Reports may only be written inside the workspace ``output/`` directory
+        (or an explicit ``runtime.output_root``). Without this an editor-level
+        job YAML could point ``output`` at source files or config.
+        """
         raw = job.get("output", "")
+        runtime = job.get("runtime") or {}
+        configured = (
+            runtime.get("output_root")
+            or self.sys.get("defaults", {}).get("output_dir", "output")
+        )
+        allowed_root = (
+            os.path.abspath(configured)
+            if os.path.isabs(configured)
+            else os.path.abspath(os.path.join(self.workspace_dir, configured))
+        )
         if not raw:
             name = job.get("name", job.get("_file", "report"))
             ext = ".md"
-            raw = os.path.join(
-                self.sys.get("defaults", {}).get("output_dir", "output"),
-                f"{{date}}_{name}{ext}",
-            )
+            raw = os.path.join(configured, f"{{date}}_{name}{ext}")
 
         path = self._render_path(raw, job)
 
@@ -372,8 +384,25 @@ class ResearchEngine:
             safe = re.sub(r'[<>:"/\\|?*]', "_", name)
             path = os.path.join(path, f"{safe}_{self._now():%Y-%m-%d}.md")
 
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        return path
+        # Resolve relative targets against the workspace (not the process CWD)
+        # so validation and the actual write always agree. When an explicit
+        # output_root is configured, relative outputs live under that root.
+        custom_root = runtime.get("output_root")
+        base_dir = allowed_root if custom_root else self.workspace_dir
+        was_relative = not os.path.isabs(path)
+        resolved = os.path.abspath(os.path.join(base_dir, path))
+        if resolved != allowed_root and not resolved.startswith(allowed_root + os.sep):
+            raise ValueError(
+                f"Output path escapes the allowed root '{allowed_root}': {raw!r}. "
+                "Set runtime.output_root explicitly if this is intended."
+            )
+
+        os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+        # Keep relative targets relative so stored paths stay comparable with
+        # the report index.
+        if was_relative:
+            return os.path.relpath(resolved, base_dir if custom_root else self.workspace_dir)
+        return resolved
 
     def _render_path(self, template: str, job: dict) -> str:
         """Substitute {var} placeholders in the output path."""

@@ -11,6 +11,7 @@ Features:
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -82,6 +83,39 @@ def validate_yaml(data: dict) -> list[str]:
         warnings.append("keywords 为空, 可能影响搜索效率")
 
     return warnings
+
+
+def validate_output_path(data: dict, output_root: str = "output") -> list[str]:
+    """Hard validation of the output target (a write path, not a style issue).
+
+    Returns a list of blocking errors: absolute paths, ``..`` escapes and
+    non-Markdown targets would let an editor overwrite source, config or
+    state files through a job run.
+    """
+    errors: list[str] = []
+    output = data.get("output", "")
+    if not isinstance(output, str) or not output.strip():
+        return errors
+
+    runtime = data.get("runtime") or {}
+    root = runtime.get("output_root") or output_root
+    raw = output.strip()
+    if os.path.isabs(raw):
+        errors.append("output 必须是相对路径")
+        return errors
+    resolved = os.path.abspath(os.path.join(root, raw))
+    root_abs = os.path.abspath(root)
+    if resolved != root_abs and not resolved.startswith(root_abs + os.sep):
+        errors.append(f"output 路径超出允许目录 '{root}'")
+    if not raw.endswith((".md", ".mdx")):
+        errors.append("output 必须以 .md 或 .mdx 结尾")
+    bad_vars = [
+        v for v in re.findall(r"\{(\w+)\}", raw)
+        if v not in {"name", "date", "time", "datetime"}
+    ]
+    if bad_vars:
+        errors.append(f"output 中未知变量: {', '.join(sorted(set(bad_vars)))}")
+    return errors
 
 
 def check_conflict(file_path: str, expected_mtime: float) -> Optional[float]:

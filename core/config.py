@@ -26,20 +26,45 @@ def load_system_config(config_dir: str = "config") -> dict:
     return cfg
 
 
+def _is_safe_job_name(job_name: str) -> bool:
+    """Reject names that could escape the jobs directory."""
+    if not job_name or job_name.startswith(("/", "\\")):
+        return False
+    if os.path.isabs(job_name):
+        return False
+    normalized = os.path.normpath(job_name)
+    if normalized.startswith("..") or normalized.startswith("/"):
+        return False
+    parts = normalized.replace("\\", "/").split("/")
+    return ".." not in parts
+
+
 def _find_job_path(jobs_dir: str, job_name: str) -> Optional[str]:
     """Resolve a job name to its file path, searching recursively.
 
     Supports flat names ("simple_test") and nested names ("monitoring/ai_monitoring").
     Also tries matching against the YAML 'name' field (case-insensitive).
     Returns the file path relative to jobs_dir (without extension) if found.
+
+    Names that would escape ``jobs_dir`` (absolute paths, ``..`` segments) are
+    rejected so a crafted job name cannot read or write files elsewhere.
     """
+    if not _is_safe_job_name(job_name):
+        logger.warning("Rejected unsafe job name: %r", job_name)
+        return None
+
+    jobs_root = os.path.abspath(jobs_dir)
+
+    def _within(path: str) -> bool:
+        return os.path.abspath(path).startswith(jobs_root + os.sep)
+
     # Direct lookup: try exact path
     candidate = os.path.join(jobs_dir, f"{job_name}.yaml")
-    if os.path.isfile(candidate):
+    if os.path.isfile(candidate) and _within(candidate):
         return job_name
 
     candidate_yml = os.path.join(jobs_dir, f"{job_name}.yml")
-    if os.path.isfile(candidate_yml):
+    if os.path.isfile(candidate_yml) and _within(candidate_yml):
         return job_name
 
     # Recursive search by basename (for backward compat: "ai_monitoring" → find anywhere)

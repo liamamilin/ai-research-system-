@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import re
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -88,15 +90,33 @@ def get_round(date: str, user=Depends(require_viewer)):
     return _round_payload(date)
 
 
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _require_date(value: str | None, field: str) -> str | None:
+    """Validate a real YYYY-MM-DD date before it is joined onto a path."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ApiError.make("invalid_date", f"{field} 格式应为 YYYY-MM-DD"),
+        )
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ApiError.make("invalid_date", f"{field} 不是有效日期"),
+        )
+    return value
+
+
 @router.get("/rounds/{date}/diff")
 def get_round_diff(date: str, against: str | None = Query(None),
                    user=Depends(require_viewer)):
     """Content diff between a round and the previous one (or ``against``)."""
-    if len(date) != 10:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=ApiError.make("invalid_date", "日期格式应为 YYYY-MM-DD"),
-        )
+    _require_date(date, "date")
     settings = get_settings()
     base = os.path.join(settings.paths.output_dir, pipeline.PIPELINE_DIR)
     round_b = os.path.join(base, date)
@@ -107,12 +127,7 @@ def get_round_diff(date: str, against: str | None = Query(None),
         )
 
     if against:
-        if len(against) != 10:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=ApiError.make("invalid_date", "against 格式应为 YYYY-MM-DD"),
-            )
-        previous = against
+        previous = _require_date(against, "against")
     else:
         candidates = sorted(
             d for d in os.listdir(base)
@@ -179,7 +194,7 @@ def retry_round(request: Request, payload: dict | None = None,
         concurrency = int(payload.get("concurrency", 3))
     except (TypeError, ValueError):
         concurrency = 3
-    date = payload.get("date")
+    date = _require_date(payload.get("date"), "date")
 
     try:
         state = pipeline.start_retry(
