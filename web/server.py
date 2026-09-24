@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
     elif scan_result["indexed"] == 0:
         logger.info("No reports found in %s", settings.paths.output_dir)
     # Start incremental file watcher
-    start_watcher(settings.paths.output_dir)
+    start_watcher(settings.paths.output_dir, state_dir=settings.paths.state_dir)
 
     logger.info("Web UI started")
     yield

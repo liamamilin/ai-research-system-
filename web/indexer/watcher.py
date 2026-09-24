@@ -11,9 +11,11 @@ indexing; the enum members are compared directly here.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
+from datetime import datetime
 import time
 from typing import Callable, Optional
 
@@ -73,12 +75,47 @@ def _handle_change(change_type, change_path: str, output_dir: str) -> bool:
     return False
 
 
+HEARTBEAT_NAME = "watcher.json"
+
+
+def heartbeat_path(state_dir: str = "state") -> str:
+    return os.path.join(state_dir, HEARTBEAT_NAME)
+
+
+def _write_heartbeat(state_dir: str, **fields) -> None:
+    """Persist what the watcher is doing, so health checks can see it.
+
+    A watcher that dies leaves no trace except a log line nobody reads: the
+    index then silently stops updating while every count-based check still
+    looks fine.
+    """
+    try:
+        from core.fileio import atomic_write
+
+        payload = dict(fields)
+        payload["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        atomic_write(heartbeat_path(state_dir),
+                     json.dumps(payload, ensure_ascii=False, indent=1))
+    except Exception as exc:  # noqa: BLE001 - telemetry must never break watching
+        logger.debug("watcher heartbeat not written: %s", exc)
+
+
+def read_heartbeat(state_dir: str = "state") -> Optional[dict]:
+    """The watcher's last self-report, or None when it never ran."""
+    try:
+        with open(heartbeat_path(state_dir), "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
 def start_watcher(
     output_dir: str,
     on_change: Optional[Callable[[], None]] = None,
     poll_delay_ms: int = 2000,
     stop_event: Optional[threading.Event] = None,
     reconcile_seconds: int = 300,
+    state_dir: str = "state",
 ) -> threading.Thread:
     """Start a background thread watching output_dir for file changes.
 
@@ -98,6 +135,9 @@ def start_watcher(
         from watchfiles import watch
     except ImportError:
         logger.warning("watchfiles not installed; incremental indexing disabled")
+        _write_heartbeat(state_dir, stopped=True, output_dir=output_dir,
+                         error="watchfiles not installed",
+                         started_at=datetime.now().astimezone().isoformat(timespec="seconds"))
         return threading.Thread(target=lambda: None, daemon=True)
 
     def _reconcile() -> None:
@@ -115,7 +155,19 @@ def start_watcher(
 
     def _watch():
         logger.info("Starting file watcher for: %s", output_dir)
+        started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         next_reconcile = time.time() + reconcile_seconds
+        stats = {"indexed": 0, "errors": 0, "reconciles": 0,
+                 "last_event_at": "", "last_reconcile_at": ""}
+
+        def beat(**extra) -> None:
+            # `extra` may carry stopped/error, so it must win over the defaults.
+            payload = {"stopped": False}
+            payload.update(extra)
+            _write_heartbeat(state_dir, output_dir=output_dir,
+                             started_at=started_at, **stats, **payload)
+
+        beat()
         try:
             for changes in watch(
                 output_dir,
@@ -130,7 +182,12 @@ def start_watcher(
                         if _handle_change(change_type, change_path, output_dir):
                             indexed_any = True
                     except Exception as exc:  # noqa: BLE001 - keep watching
+                        stats["errors"] += 1
                         logger.warning("Watcher skipped %s: %s", change_path, exc)
+                if indexed_any:
+                    stats["indexed"] += 1
+                    stats["last_event_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    beat()
                 if indexed_any and on_change:
                     try:
                         on_change()
@@ -140,8 +197,14 @@ def start_watcher(
                 if time.time() >= next_reconcile:
                     next_reconcile = time.time() + reconcile_seconds
                     _reconcile()
+                    stats["reconciles"] += 1
+                    stats["last_reconcile_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+                    beat()
         except Exception as exc:  # noqa: BLE001 - surface watcher death
             logger.error("File watcher stopped: %s", exc)
+            beat(stopped=True, error=f"{type(exc).__name__}: {exc}")
+        else:
+            beat(stopped=True, error=None)
 
     thread = threading.Thread(target=_watch, daemon=True, name="report-watcher")
     thread.start()

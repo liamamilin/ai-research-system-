@@ -13,7 +13,14 @@ import pytest
 from core import fileio, health
 
 
-def _make_reports_db(path: str, reports: int = 3, embedded: int = 3) -> None:
+def _make_reports_db(path: str, reports: int = 3, embedded: int = 3,
+                     output_dir: str = None) -> None:
+    """An index that actually matches the files on disk.
+
+    Creating index rows for reports that do not exist would make the
+    consistency check report orphans, which is a real condition worth
+    detecting but not what a "clean environment" fixture should contain.
+    """
     conn = sqlite3.connect(path)
     try:
         conn.executescript(
@@ -23,12 +30,54 @@ def _make_reports_db(path: str, reports: int = 3, embedded: int = 3) -> None:
             """
         )
         for i in range(reports):
-            conn.execute("INSERT OR IGNORE INTO reports VALUES (?)", (f"r{i}.md",))
+            name = f"r{i}.md"
+            if output_dir:
+                with open(os.path.join(output_dir, name), "w", encoding="utf-8") as f:
+                    f.write(f"# report {i}\n\nbody text for report {i}\n")
+            conn.execute("INSERT OR IGNORE INTO reports VALUES (?)", (name,))
         for i in range(embedded):
             conn.execute("INSERT OR IGNORE INTO chunk_meta VALUES (?)", (f"r{i}.md",))
         conn.commit()
     finally:
         conn.close()
+
+
+def _make_full_reports_db(path: str, output_dir: str) -> None:
+    """A reports table shaped like the real one, matching files on disk."""
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript("""
+            DROP TABLE IF EXISTS reports;
+            CREATE TABLE reports (
+                path TEXT PRIMARY KEY,
+                size_bytes INTEGER DEFAULT 0,
+                mtime REAL NOT NULL
+            )
+        """)
+        for i in range(3):
+            name = f"r{i}.md"
+            full = os.path.join(output_dir, name)
+            with open(full, "w", encoding="utf-8") as f:
+                f.write(f"# report {i}")
+            st = os.stat(full)
+            conn.execute("INSERT OR REPLACE INTO reports VALUES (?,?,?)",
+                         (name, st.st_size, st.st_mtime))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _write_heartbeat(env, **fields) -> None:
+    payload = {
+        "started_at": "2026-09-24T06:00:00+0800",
+        "output_dir": env["output"],
+        "indexed": 0,
+        "errors": 0,
+        "stopped": False,
+    }
+    payload.update(fields)
+    with open(os.path.join(env["state"], "watcher.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f)
 
 
 @pytest.fixture()
@@ -39,7 +88,7 @@ def env(tmp_path):
     for d in (state, output, config):
         d.mkdir()
     (config / "system.yaml").write_text("ai:\n  model: test-model\n", encoding="utf-8")
-    _make_reports_db(str(state / "reports.db"))
+    _make_reports_db(str(state / "reports.db"), output_dir=str(output))
     conn = sqlite3.connect(str(state / "tracking.db"))
     conn.execute("CREATE TABLE items (id TEXT PRIMARY KEY)")
     conn.commit()
@@ -67,6 +116,7 @@ def _by_name(result, name):
 
 
 def test_clean_environment_is_healthy(env):
+    _write_heartbeat(env)  # the server runs a watcher
     result = _run(env)
     assert result["status"] == "ok"
     assert result["errors"] == [] and result["warnings"] == []
@@ -130,14 +180,52 @@ def test_vector_coverage_warns_when_reports_lack_vectors(env):
     assert "FTS" in check["detail"]
 
 
-def test_index_freshness_warns_on_lag(env):
-    for i in range(25):
+def test_index_freshness_reports_unindexed_and_orphaned_separately(env):
+    # One file indexed but deleted, and new files on disk that nobody indexed:
+    # a count difference (4 - 3) would have called this "in sync".
+    os.remove(os.path.join(env["output"], "r0.md"))
+    for i in range(5):
         with open(os.path.join(env["output"], f"new{i}.md"), "w", encoding="utf-8") as f:
             f.write("# new")
-    result = _run(env)
-    check = _by_name(result, "index_freshness")
+    check = _by_name(_run(env), "index_freshness")
     assert check["status"] == "warn"
-    assert check["missing"] == 22  # 25 new files minus the 3 pre-indexed reports
+    assert check["missing"] == 5
+    assert check["orphaned"] == 1
+    assert check["orphaned_sample"] == ["r0.md"]
+
+
+def test_index_freshness_detects_edited_file(env):
+    _make_full_reports_db(os.path.join(env["state"], "reports.db"), env["output"])
+    check = _by_name(_run(env), "index_freshness")
+    assert check["status"] == "ok"
+
+    with open(os.path.join(env["output"], "r0.md"), "w", encoding="utf-8") as f:
+        f.write("# r0 rewritten with different content")
+    check = _by_name(_run(env), "index_freshness")
+    assert check["status"] == "warn"
+    assert check["stale"] == 1
+    assert check["stale_sample"] == ["r0.md"]
+    assert "edited on disk" in check["detail"]
+
+
+def test_watcher_heartbeat_missing_is_a_warning(env):
+    check = _by_name(_run(env), "watcher")
+    assert check["status"] == "warn"
+    assert "heartbeat" in check["detail"]
+
+
+def test_watcher_heartbeat_reports_a_stopped_watcher(env):
+    _write_heartbeat(env, stopped=True, error="OSError: inotify limit")
+    check = _by_name(_run(env), "watcher")
+    assert check["status"] == "warn"
+    assert "inotify limit" in check["detail"]
+
+
+def test_watcher_heartbeat_ok(env):
+    _write_heartbeat(env, stopped=False, indexed=7, output_dir=env["output"])
+    check = _by_name(_run(env), "watcher")
+    assert check["status"] == "ok"
+    assert check["indexed"] == 7
 
 
 def _write_rounds(env, payload) -> None:

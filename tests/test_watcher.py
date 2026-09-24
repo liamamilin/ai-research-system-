@@ -17,6 +17,8 @@ import time
 
 import pytest
 
+from web.indexer import watcher
+
 watchfiles = pytest.importorskip("watchfiles")
 
 
@@ -262,3 +264,56 @@ def _wait_for(predicate, timeout: float, interval: float = 0.2) -> None:
             pass
         time.sleep(interval)
     raise AssertionError(f"condition not met within {timeout}s")
+
+
+def test_watcher_writes_a_heartbeat(tmp_path):
+    """A dead watcher must leave evidence, not just a log line nobody reads."""
+    state = tmp_path / "state"
+    state.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    stop = threading.Event()
+    thread = watcher.start_watcher(str(output), state_dir=str(state),
+                                   stop_event=stop, reconcile_seconds=1)
+    try:
+        deadline = time.time() + 5
+        beat = None
+        while time.time() < deadline:
+            beat = watcher.read_heartbeat(str(state))
+            if beat:
+                break
+            time.sleep(0.1)
+        assert beat, "no heartbeat written"
+        assert beat["stopped"] is False
+        assert beat["output_dir"] == str(output)
+        assert beat["indexed"] == 0
+        assert beat["started_at"]
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+
+def test_heartbeat_records_indexed_updates(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    output = tmp_path / "output"
+    output.mkdir()
+    stop = threading.Event()
+    thread = watcher.start_watcher(str(output), state_dir=str(state),
+                                   stop_event=stop, poll_delay_ms=100)
+    try:
+        report = output / "heartbeat_probe.md"
+        report.write_text("# probe\n\nbody", encoding="utf-8")
+        deadline = time.time() + 8
+        indexed = 0
+        while time.time() < deadline:
+            beat = watcher.read_heartbeat(str(state)) or {}
+            indexed = beat.get("indexed", 0)
+            if indexed:
+                assert beat["last_event_at"]
+                break
+            time.sleep(0.1)
+        assert indexed >= 1, "heartbeat did not record the incremental update"
+    finally:
+        stop.set()
+        thread.join(timeout=5)

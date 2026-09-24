@@ -9,10 +9,14 @@ pipeline round.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import sqlite3
 import time
+from datetime import datetime
+from typing import Optional
 from typing import Optional
 
 OK = "ok"
@@ -91,28 +95,131 @@ def _disk_check(path: str) -> dict:
 
 
 def _index_freshness(output_dir: str, state_dir: str) -> dict:
-    """Compare on-disk reports with indexed rows (watcher lag detection)."""
+    """Compare on-disk reports with indexed rows, set-wise.
+
+    A count difference is not enough: deleting one file and adding another
+    nets to zero while both are wrong, and an edited file keeps its old body in
+    the search index indefinitely if the watcher is not running. So compare
+    paths and mtimes, and report each class of drift separately.
+    """
     reports_db = os.path.join(state_dir, "reports.db")
     if not os.path.isfile(reports_db):
         return _check("index_freshness", WARN, "reports.db missing")
-    on_disk = 0
+    disk: dict[str, tuple[float, int]] = {}
     for root, _dirs, files in os.walk(output_dir):
-        on_disk += sum(1 for f in files if f.endswith((".md", ".mdx")))
+        for name in files:
+            if not name.endswith((".md", ".mdx")):
+                continue
+            full = os.path.join(root, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            disk[os.path.relpath(full, output_dir)] = (st.st_mtime, st.st_size)
     try:
         conn = sqlite3.connect(f"file:{reports_db}?mode=ro", uri=True, timeout=2)
         try:
-            indexed = conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0]
+            try:
+                rows = conn.execute(
+                    "SELECT path, mtime, size_bytes FROM reports").fetchall()
+            except sqlite3.OperationalError:
+                # An index written by an older build has no mtime/size columns.
+                # Path comparison still works; content drift cannot be detected.
+                rows = [(r[0], None, None) for r in conn.execute("SELECT path FROM reports")]
+                has_stamps = False
+            else:
+                has_stamps = True
         finally:
             conn.close()
     except sqlite3.Error as exc:
         return _check("index_freshness", ERROR, f"{type(exc).__name__}: {exc}")
 
-    missing = on_disk - indexed
-    if missing > STALE_INDEX_FILES:
+    indexed = {r[0]: (r[1] or 0.0, r[2] or 0) for r in rows}
+    unindexed = sorted(set(disk) - set(indexed))
+    orphaned = sorted(set(indexed) - set(disk))
+    # mtime differs by more than a second, or the size changed: the indexed
+    # text is not what is on disk.
+    stale = sorted(
+        path for path, (mtime, size) in disk.items()
+        if has_stamps and path in indexed and (
+            abs(indexed[path][0] - mtime) > 1.0 or indexed[path][1] != size
+        )
+    )
+
+    if orphaned or stale:
+        detail_parts = []
+        if stale:
+            detail_parts.append(f"{len(stale)} stale (edited on disk, old text indexed)")
+        if orphaned:
+            detail_parts.append(f"{len(orphaned)} orphaned (indexed, file gone)")
+        if unindexed:
+            detail_parts.append(f"{len(unindexed)} not indexed")
+        return _check(
+            "index_freshness", WARN,
+            "; ".join(detail_parts) or "index out of sync",
+            content_drift_detectable=has_stamps,
+            stale=len(stale), orphaned=len(orphaned), missing=len(unindexed),
+            stale_sample=stale[:5], orphaned_sample=orphaned[:5],
+            unindexed_sample=unindexed[:5],
+            indexed=len(indexed), on_disk=len(disk),
+        )
+    if len(unindexed) > STALE_INDEX_FILES:
         return _check("index_freshness", WARN,
-                      f"{missing} reports on disk not indexed", missing=missing)
+                      f"{len(unindexed)} reports on disk not indexed",
+                      missing=len(unindexed), unindexed_sample=unindexed[:5],
+                      indexed=len(indexed), on_disk=len(disk))
     return _check("index_freshness", OK,
-                  f"{indexed} indexed, {missing} pending", missing=missing)
+                  f"{len(indexed)} indexed and in sync",
+                  missing=len(unindexed), indexed=len(indexed), on_disk=len(disk),
+                  content_drift_detectable=has_stamps)
+
+
+def _watcher_heartbeat(state_dir: str) -> dict:
+    """The index watcher's own report on itself.
+
+    Without this, a watcher that died at import time is indistinguishable from
+    one that is happily indexing: the index simply stops updating.
+    """
+    path = os.path.join(state_dir, "watcher.json")
+    if not os.path.isfile(path):
+        return _check("watcher", WARN, "no watcher heartbeat: the index only updates on full scans")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return _check("watcher", WARN, f"unreadable watcher heartbeat: {exc}")
+
+    if data.get("stopped"):
+        return _check("watcher", WARN, f"watcher stopped: {data.get('error') or 'no detail'}",
+                      last_event_at=data.get("last_event_at", ""))
+    started = _epoch(data.get("started_at"))
+    if started is None:
+        return _check("watcher", WARN, "watcher heartbeat has no timestamp")
+    if started > time.time() + 60:
+        return _check("watcher", WARN, "watcher heartbeat is in the future")
+    return _check("watcher", OK,
+                  f"watching {data.get('output_dir', '?')}, "
+                  f"{data.get('indexed', 0)} incremental updates",
+                  indexed=data.get("indexed", 0),
+                  last_event_at=data.get("last_event_at", ""),
+                  last_reconcile_at=data.get("last_reconcile_at", ""),
+                  errors=data.get("errors", 0))
+
+
+def _epoch(value) -> Optional[float]:
+    """Parse an ISO timestamp; strftime's %z gives "+0800", fromisoformat wants "+08:00"."""
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    for candidate in (text, re.sub(r"([+-]\d{2})(\d{2})$", r"\1:\2", text)):
+        try:
+            return datetime.fromisoformat(candidate).timestamp()
+        except ValueError:
+            continue
+    return None
+
 
 
 def _vector_coverage(state_dir: str) -> dict:
@@ -186,6 +293,7 @@ def run_checks(state_dir: str = "state", output_dir: str = "output",
     checks.append(_disk_check(state_dir))
     if deep:
         checks.append(_index_freshness(output_dir, state_dir))
+        checks.append(_watcher_heartbeat(state_dir))
         checks.append(_vector_coverage(state_dir))
         checks.append(_last_round(state_dir))
 
