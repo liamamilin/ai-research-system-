@@ -62,8 +62,48 @@ def test_short_query_falls_back_to_like(index_db_env):
 
     assert [h["path"] for h in index_db.search_reports("AI", limit=10)] == ["research/ai.md"]
     assert [h["path"] for h in index_db.search_reports("RAG", limit=10)] == ["research/rag.md"]
-    # mixed short + long terms also take the LIKE path
-    assert index_db.search_reports("AI 检索", limit=10) == []
+
+
+def test_mixed_short_and_long_terms_search_both(index_db_env):
+    """One short term must not throw away the trigram search for the rest.
+
+    "AI 检索增强" used to go down the LIKE path as a single phrase, so it
+    matched neither the body containing 检索增强 nor the title containing AI.
+    """
+    # Found by trigram only: the short term is absent from its title and path.
+    _write(index_db_env, "research/memory.md", "# 记忆系统\n\n检索增强生成\n")
+    # Found by LIKE only: the long term appears nowhere in it.
+    _write(index_db_env, "research/ai.md", "# AI 工程\n\n完全不同的内容\n")
+    # Neither.
+    _write(index_db_env, "research/other.md", "# 无关报告\n\n别的说法\n")
+    for rel in ("memory.md", "ai.md", "other.md"):
+        index_scanner.index_file(str(index_db_env), f"research/{rel}")
+
+    hits = index_db.search_reports("AI 检索增强", limit=10)
+    # The trigram match (body text) leads; the LIKE match (title/path) follows.
+    assert [h["path"] for h in hits] == ["research/memory.md", "research/ai.md"]
+    assert hits[0]["fts_score"] is not None
+    assert hits[1]["fts_score"] is None
+    assert "research/other.md" not in [h["path"] for h in hits]
+
+
+def test_short_terms_are_or_ed_not_phrase_matched(index_db_env):
+    _write(index_db_env, "research/a.md", "# 定价模型\n\n正文无关\n")
+    _write(index_db_env, "research/b.md", "# 模型评估\n\n正文无关\n")
+    for rel in ("a.md", "b.md"):
+        index_scanner.index_file(str(index_db_env), f"research/{rel}")
+
+    hits = index_db.search_reports("定价 评估", limit=10)
+    assert {h["path"] for h in hits} == {"research/a.md", "research/b.md"}
+
+
+def test_like_term_count_is_capped(index_db_env):
+    """A pasted paragraph must not build an unbounded SQL statement."""
+    _write(index_db_env, "research/a.md", "# 报告\n\n正文\n")
+    index_scanner.index_file(str(index_db_env), "research/a.md")
+    # 30 two-character terms, only the first 8 are scanned.
+    query = " ".join("关键词" for _ in range(30))
+    assert index_db.search_reports(query, limit=10) == []
 
 
 def test_empty_query_returns_nothing(index_db_env):

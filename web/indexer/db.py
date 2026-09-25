@@ -21,6 +21,9 @@ _lock = threading.Lock()
 FTS_TOKENIZER = "trigram"
 FTS_SCHEMA_VERSION = 2
 MIN_TRIGRAM_QUERY = 3
+# A query can be long; only the first few short terms get a LIKE scan so a
+# pasted paragraph cannot build an unbounded SQL statement.
+MAX_LIKE_TERMS = 8
 
 
 def db_path() -> str:
@@ -253,16 +256,29 @@ def sanitize_fts_query(query: str) -> str:
 def search_reports(query: str, limit: int = 20) -> list[dict]:
     """Full-text search across report titles and content using FTS5.
 
-    Returns results with highlighted snippets.
+    Trigrams need three characters per term, so short terms are searched with a
+    LIKE scan over titles and paths. Both halves run for a mixed query: sending
+    "AI agent" down the LIKE path as one phrase threw away the trigram search
+    that "agent" could have used, and the whole query then matched nothing.
     """
     text = (query or "").strip()
     if not text:
         return []
     terms = [t for t in text.split() if t]
-    # Trigram needs >= 3 characters per term; anything shorter (e.g. "RAG",
-    # "AI") would silently match nothing, so fall back to a LIKE scan.
-    if not terms or any(len(t) < MIN_TRIGRAM_QUERY for t in terms):
-        return _search_like(text, limit)
+    short = [t for t in terms if len(t) < MIN_TRIGRAM_QUERY]
+    searchable = [t for t in terms if len(t) >= MIN_TRIGRAM_QUERY]
+
+    if not searchable:
+        return _search_like(short or terms, limit)
+
+    rows = _search_fts(" ".join(searchable), limit)
+    if not short:
+        return rows
+    return _merge_paths(rows, _search_like(short, limit), limit)
+
+
+def _search_fts(text: str, limit: int) -> list[dict]:
+    """Trigram FTS5 search, best match first."""
     safe_query = sanitize_fts_query(text)
     if not safe_query:
         return []
@@ -292,25 +308,46 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
         return [_serialize_row(r) for r in rows]
 
 
-def _search_like(text: str, limit: int) -> list[dict]:
+def _merge_paths(primary: list[dict], extra: list[dict], limit: int) -> list[dict]:
+    """Keep the primary ranking, then append hits the primary did not find."""
+    seen = {row["path"] for row in primary}
+    out = list(primary)
+    for row in extra:
+        if row["path"] in seen:
+            continue
+        seen.add(row["path"])
+        out.append(row)
+    return out[:limit]
+
+
+def _search_like(terms: list[str], limit: int) -> list[dict]:
     """Substring search for terms too short for trigram indexing.
 
     Trigrams cannot match one- or two-character terms, and the body text only
-    lives in the FTS index, so short queries match titles and paths only.
+    lives in the FTS index, so short queries match titles and paths only. Terms
+    are OR-ed: matching the whole phrase at once would make "AI 检索" miss a
+    report titled "AI 工程" purely because of the second word.
     """
-    pattern = f"%{text.replace('%', '').replace('_', '')}%"
+    wanted = [t for t in terms if t][:MAX_LIKE_TERMS]
+    if not wanted:
+        return []
+    clause = " OR ".join(["(title LIKE ? COLLATE NOCASE OR path LIKE ? COLLATE NOCASE)"]
+                         * len(wanted))
+    params: list = []
+    for term in wanted:
+        pattern = f"%{term.replace('%', '').replace('_', '')}%"
+        params.extend([pattern, pattern])
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT path, job_name, title, category, size_bytes, mtime,
                    favorite, tags, read_at
             FROM reports
-            WHERE title LIKE ? COLLATE NOCASE
-               OR path LIKE ? COLLATE NOCASE
+            WHERE {clause}
             ORDER BY mtime DESC
             LIMIT ?
             """,
-            (pattern, pattern, limit),
+            (*params, limit),
         ).fetchall()
     out = []
     for row in rows:
