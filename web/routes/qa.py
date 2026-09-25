@@ -43,6 +43,31 @@ def _llm_factory(sys_config: dict):
     return make
 
 
+def _retrieval_number(cfg: dict, key: str, default, cast):
+    """Read a config number, keeping an explicit 0 and rejecting junk."""
+    raw = cfg.get(key, default)
+    if raw is None or raw == "":
+        return cast(default)
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        logger.warning("qa.%s is not a %s; using %s", key, cast.__name__, default)
+        return cast(default)
+
+
+def _retrieval_settings(sys_config) -> dict:
+    """Read the retrieval knobs, clamped so a typo cannot invert the ranking."""
+    qa_cfg = sys_config.get("qa") or {}
+    weight = _retrieval_number(qa_cfg, "recency_weight", 0, float)
+    half_life = _retrieval_number(qa_cfg, "recency_half_life_days", 30, float)
+    overfetch = _retrieval_number(qa_cfg, "overfetch", 3, int)
+    return {
+        "recency_weight": min(1.0, max(0.0, weight)),
+        "half_life_days": max(0.0, half_life),
+        "overfetch": min(10, max(1, overfetch)),
+    }
+
+
 @router.post("")
 def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le=20),
                  user=Depends(require_viewer)):
@@ -56,11 +81,14 @@ def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le
 
     sys_config = load_system_config(get_settings().paths.config_dir)
     query_vector = _embed_query(question, sys_config)
-    hits = vectors.hybrid_search(question, query_vector or None, limit=limit)
+    retrieval = _retrieval_settings(sys_config)
+    hits = vectors.hybrid_search(question, query_vector or None, limit=limit,
+                                 **retrieval)
 
     if not hits:
         return {"answer": "没有检索到相关资料，请尝试换一个问法或先运行/重建索引。",
-                "citations": [], "mode": "fts" if not query_vector else "hybrid"}
+                "citations": [], "mode": "fts" if not query_vector else "hybrid",
+                "retrieval": retrieval}
 
     result = ask_with_fallback(question, hits, _llm_factory(sys_config))
     if result is None:
@@ -95,6 +123,7 @@ def ask_question(payload: dict, request: Request, limit: int = Query(6, ge=1, le
         "citations": result["citations"],
         "mode": "hybrid" if query_vector else "fts",
         "usage": result.get("usage") or {},
+        "retrieval": retrieval,
     }
 
 

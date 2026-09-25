@@ -27,6 +27,7 @@ def format_citations(hits: list[dict]) -> list[dict]:
             "snippet": (hit.get("snippet") or "")[:400],
             "source": hit.get("source", ""),
             "score": round(float(hit.get("score") or 0), 4),
+            "report_date": hit.get("report_date") or "",
         })
     return citations
 
@@ -39,7 +40,12 @@ def build_messages(question: str, hits: list[dict]) -> list[dict]:
         snippet = (hit.get("snippet") or "").strip()
         if not snippet:
             continue
-        block = f"[{i}] 来源：{hit.get('path', '')}\n{snippet}"
+        # The date travels with the excerpt: without it the model cannot tell a
+        # June finding from yesterday's, and happily presents stale news as
+        # current.
+        stamp = hit.get("report_date") or ""
+        source = f"{hit.get('path', '')}（{stamp}）" if stamp else hit.get("path", "")
+        block = f"[{i}] 来源：{source}\n{snippet}"
         if used + len(block) > _MAX_CONTEXT_CHARS:
             break
         parts.append(block)

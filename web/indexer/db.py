@@ -279,7 +279,8 @@ def search_reports(query: str, limit: int = 20) -> list[dict]:
                 r.favorite,
                 r.tags,
                 r.read_at,
-                snippet(reports_fts, 1, '<mark>', '</mark>', '...', 40) AS snippet
+                snippet(reports_fts, 1, '<mark>', '</mark>', '...', 40) AS snippet,
+                bm25(reports_fts) AS fts_score
             FROM reports_fts
             JOIN reports r ON r.rowid = reports_fts.rowid
             WHERE reports_fts MATCH ?
@@ -315,6 +316,10 @@ def _search_like(text: str, limit: int) -> list[dict]:
     for row in rows:
         item = _serialize_row(row)
         item["snippet"] = None
+        # A LIKE hit carries no gradation of relevance: every row matched the
+        # same substring. Reporting None keeps the caller from inventing a
+        # ranking out of row order.
+        item["fts_score"] = None
         out.append(item)
     return out
 

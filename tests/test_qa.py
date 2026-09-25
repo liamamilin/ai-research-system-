@@ -50,6 +50,27 @@ def test_build_messages_numbers_sources():
     assert "what is alpha?" in user
 
 
+def test_build_messages_shows_the_report_date():
+    """Without the date the model cannot tell June's finding from today's."""
+    hits = [
+        {"path": "old.md", "snippet": "shipped back then", "report_date": "2026-06-01"},
+        {"path": "new.md", "snippet": "shipped yesterday", "report_date": "2026-09-25"},
+    ]
+    user = qa.build_messages("when did it ship?", hits)[-1]["content"]
+    assert "[1] 来源：old.md（2026-06-01）" in user
+    assert "[2] 来源：new.md（2026-09-25）" in user
+
+
+def test_citations_expose_the_report_date():
+    citations = qa.format_citations([
+        {"path": "a.md", "snippet": "x", "score": 1.25, "report_date": "2026-09-25"},
+        {"path": "b.md", "snippet": "y", "score": 0.5},
+    ])
+    assert citations[0]["report_date"] == "2026-09-25"
+    # A missing date must not surface as "None" in the UI.
+    assert citations[1]["report_date"] == ""
+
+
 def test_ask_returns_answer_and_citations():
     hits = [{"path": "a.md", "title": "A", "snippet": "body", "score": 0.7,
              "source": "hybrid"}]
@@ -108,9 +129,52 @@ def test_qa_fts_only_answers(client, indexed, monkeypatch):
     assert fake.closed is True
 
 
-def test_qa_no_hits_message(client, indexed, monkeypatch):
+@pytest.mark.parametrize("cfg,expected", [
+    ({}, {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 3}),
+    ({"qa": {"recency_weight": 0.25, "recency_half_life_days": 14, "overfetch": 5}},
+     {"recency_weight": 0.25, "half_life_days": 14.0, "overfetch": 5}),
+    # A typo must not invert the ranking or blow up the candidate pool.
+    ({"qa": {"recency_weight": "soon", "recency_half_life_days": [], "overfetch": 0}},
+     {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 1}),
+    ({"qa": {"recency_weight": 9, "overfetch": 9999}},
+     {"recency_weight": 1.0, "half_life_days": 30.0, "overfetch": 10}),
+])
+def test_retrieval_settings_are_read_and_clamped(cfg, expected):
     from web.routes import qa as qa_route
 
+    assert qa_route._retrieval_settings(cfg) == expected
+
+
+def test_qa_passes_the_configured_recency_into_retrieval(client, indexed, monkeypatch):
+    from web.routes import qa as qa_route
+
+    monkeypatch.setattr(qa_route, "_embed_query", lambda q, cfg: [])
+    fake = FakeLLM(content="回答 [1]")
+    monkeypatch.setattr(qa_route, "_llm_factory", lambda cfg: (lambda: fake))
+    seen = {}
+
+    def fake_search(query, vector, limit, **kwargs):
+        seen.update(kwargs)
+        return [{"path": "a.md", "snippet": "alpha content", "score": 1.0,
+                 "source": "fts", "report_date": "2026-09-25"}]
+
+    monkeypatch.setattr(qa_route.vectors, "hybrid_search", fake_search)
+    monkeypatch.setattr(qa_route, "load_system_config",
+                        lambda config_dir: {"qa": {"recency_weight": 0.4,
+                                                   "recency_half_life_days": 7,
+                                                   "overfetch": 2}})
+
+    _login(client, "viewer", "viewer-pass-123")
+    r = client.post("/api/qa", json={"question": "alpha"}, headers=_csrf(client))
+    assert r.status_code == 200
+    assert seen == {"recency_weight": 0.4, "half_life_days": 7.0, "overfetch": 2}
+    assert r.json()["retrieval"] == {"recency_weight": 0.4, "half_life_days": 7.0,
+                                     "overfetch": 2}
+    assert r.json()["citations"][0]["report_date"] == "2026-09-25"
+
+
+def test_qa_no_hits_message(client, indexed, monkeypatch):
+    from web.routes import qa as qa_route
     monkeypatch.setattr(qa_route, "_embed_query", lambda q, cfg: [])
     _login(client)
     r = client.post("/api/qa", json={"question": "zzz-nothing"}, headers=_csrf(client))

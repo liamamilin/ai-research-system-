@@ -59,6 +59,20 @@ search:
   # fallback_providers: ["tavily"]          # optional extra fallbacks in order
 
 # ---------------------------------------------------------------------------
+# Question answering over indexed reports
+# ---------------------------------------------------------------------------
+qa:
+  # Trades relevance against freshness. 0 = pure relevance (a June report can
+  # outrank today's), 0.25 = a report one half-life newer earns a quarter-score
+  # bonus. Raise it if answers keep quoting stale findings as current news.
+  recency_weight: 0.25
+  # How many days until a report's recency bonus halves.
+  recency_half_life_days: 30
+  # Candidate pool multiplier: recency cannot promote a report that was never
+  # recalled, so the pool is overfetched beyond the requested limit.
+  overfetch: 3
+
+# ---------------------------------------------------------------------------
 # Research agent
 # mode: auto (agent with pipeline fallback) | agent | pipeline
 # ---------------------------------------------------------------------------
