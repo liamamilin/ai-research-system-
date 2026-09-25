@@ -59,7 +59,11 @@ def describe(plan: dict) -> dict:
 
 def classify(plan: dict, host: dict) -> dict:
     last = plan.get('last_run')
-    state, detail = 'ok', '计划已生效，等待第一次执行'
+    # "Saved" is not "verified": a plan that has never run has produced no
+    # evidence at all, so it must not wear the same green as a successful run.
+    # The UI has always had a distinct "待验证" state; only the backend never
+    # used it for managed plans.
+    state, detail = 'unverified', '计划已保存，尚未执行过；第一次执行后才能确认模型与网络真的可用'
     if not plan['enabled']:
         state, detail = 'paused', '计划已暂停；恢复后从下次计划时间开始，不补跑暂停期间的任务'
     elif not host.get('online'):

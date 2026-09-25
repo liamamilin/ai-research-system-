@@ -124,3 +124,102 @@ def test_execution_history_timezone_and_delete_while_running(admin):
     storage.finish(run['id'], 'success')
     assert client.delete(f"/api/scheduler/{plan['id']}", headers=headers).status_code == 200
     assert client.get(f"/api/scheduler/{plan['id']}/runs").json()['runs'][0]['status'] == 'success'
+
+
+def test_concurrent_creates_cannot_clobber_each_other(admin, monkeypatch):
+    """Two creates of the same name must not leave a plan without its job file.
+
+    The old path checked ``isfile()`` and then renamed, so both requests passed
+    the check; the one that lost the plan's unique index removed the file the
+    winner had just created, and the plan pointed at nothing.
+    """
+    import os
+    import threading
+    import time
+
+    from web.services import yaml_io
+
+    client, root, headers, _ = admin
+    start = threading.Barrier(2)
+    results: list[int] = []
+    lock = threading.Lock()
+
+    real_create = yaml_io.atomic_create
+
+    def slow_create(path, content):
+        # Widen the window so both requests reach the exclusive publish together.
+        start.wait(timeout=5)
+        time.sleep(0.2)
+        return real_create(path, content)
+
+    monkeypatch.setattr(yaml_io, 'atomic_create', slow_create)
+
+    def attempt():
+        start.wait(timeout=5)
+        response = client.post('/api/jobs', headers=headers, json={
+            'name': '并发 job', 'category': 'research', 'description': '竞态',
+            'prompt': '正文', 'output': 'output/race_{datetime}.md',
+            'recurrence': {'schedule': '0 8 * * *', 'timezone': 'Asia/Shanghai'}})
+        with lock:
+            results.append(response.status_code)
+
+    threads = [threading.Thread(target=attempt) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
+
+    assert sorted(results) == [201, 409]
+    # The endpoint normalises the file name, so assert on what it wrote.
+    job_file = os.path.join(root, 'jobs', 'research', '并发_job.yaml')
+    assert os.path.isfile(job_file), "the winning job file was deleted by the loser"
+    plans = ScheduleStore(managed.store().state_dir).list()
+    assert [p['job_name'] for p in plans] == ['research/并发_job']
+
+
+def test_a_failed_plan_leaves_no_job_file_behind(admin, monkeypatch):
+    """The documented all-or-nothing rollback, checked on disk."""
+    import os
+
+    client, root, headers, _ = admin
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('计划写入失败')
+
+    monkeypatch.setattr(managed, 'save', refuse)
+    # _mutate turns any persistence failure into 503, not a bare 500.
+    assert create(admin).status_code == 503
+    assert not os.path.exists(os.path.join(root, 'jobs', 'research', '新增_job.yaml'))
+    assert ScheduleStore(managed.store().state_dir).list() == []
+
+
+def test_a_rollback_never_deletes_a_file_it_did_not_create(admin, monkeypatch):
+    """A losing request must leave the winner's file untouched."""
+    import os
+
+    client, root, headers, _ = admin
+    job_file = os.path.join(root, 'jobs', 'research', '新增_job.yaml')
+    os.makedirs(os.path.dirname(job_file), exist_ok=True)
+    with open(job_file, 'w', encoding='utf-8') as fh:
+        fh.write('name: 别人创建的\nprompt: 保留我\n')
+
+    def refuse(*_args, **_kwargs):
+        raise RuntimeError('计划写入失败')
+
+    monkeypatch.setattr(managed, 'save', refuse)
+    create(admin)
+    assert os.path.isfile(job_file)
+    with open(job_file, encoding='utf-8') as fh:
+        assert '保留我' in fh.read()
+
+
+def test_a_new_plan_is_not_reported_as_verified(admin):
+    """Saving a plan proves the dispatcher, never the model: no green yet."""
+    client, _, headers, _ = admin
+    assert create(admin).status_code == 201
+
+    listing = client.get('/api/scheduler', headers=headers).json()
+    managed_job = next(j for j in listing['jobs'] if j['backend'] == 'managed')
+    state = next(s for s in listing['health']['jobs'] if s['id'] == managed_job['id'])
+    assert state['status'] == 'unverified'
+    assert '尚未执行过' in state['detail']

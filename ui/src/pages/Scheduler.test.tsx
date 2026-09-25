@@ -233,3 +233,51 @@ describe("Schedule editing and previews", () => {
     expect(body.command).toBe("echo report");
   });
 });
+
+describe("managed plan status honesty", () => {
+  const MANAGED = {
+    id: "research/夜间巡检",
+    backend: "managed",
+    title: "夜间巡检",
+    enabled: true,
+    schedule: "0 3 * * *",
+    schedule_label: "0 3 * * *",
+    timezone: "Asia/Shanghai",
+  };
+
+  function mockManaged(state: unknown) {
+    const fn = vi.fn(async (url: string) => {
+      const path = String(url);
+      if (path.includes("/api/scheduler/jobs")) return jsonResponse({ jobs: [], total: 0 });
+      if (path.includes("/api/scheduler")) {
+        return jsonResponse({
+          jobs: [MANAGED], total: 1,
+          dispatcher: { online: true, detail: "执行器在线", age_seconds: 3 },
+          health: { jobs: [state], overdue: 0, paused: 0, detail: "" },
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fn);
+  }
+
+  it("does not call a never-run plan healthy", async () => {
+    // The executor being online proves the dispatcher, never the model. A plan
+    // that has never produced a run has no evidence at all.
+    mockManaged({ id: MANAGED.id, status: "unverified", schedule: "0 3 * * *",
+                   detail: "计划已保存，尚未执行过；第一次执行后才能确认模型与网络真的可用" });
+    render(<SchedulerPage />);
+    expect(await screen.findByText("待验证")).toBeTruthy();
+    expect(screen.queryByText("正常")).toBeNull();
+    expect(screen.getByText(/尚未执行过/)).toBeTruthy();
+    expect(screen.getByText(/周期执行器在线/)).toBeTruthy();
+  });
+
+  it("shows healthy only after a run actually succeeded", async () => {
+    mockManaged({ id: MANAGED.id, status: "ok", schedule: "0 3 * * *",
+                   detail: "最近一次执行成功，报告已生成", last_ran_at: "2026-09-25T03:01:00+08:00" });
+    render(<SchedulerPage />);
+    expect(await screen.findByText("正常")).toBeTruthy();
+    expect(screen.getByText(/最近一次执行成功/)).toBeTruthy();
+  });
+});

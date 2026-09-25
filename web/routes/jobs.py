@@ -473,7 +473,15 @@ def create_job(payload: dict, user=Depends(require_editor)):
             raise HTTPException(status_code=422, detail=ApiError.make('invalid_schedule', str(exc))) from exc
         _mutate(managed.ensure_online)
 
-    yaml_io.atomic_write(file_path, base_content)
+    # Exclusive publish: the isfile() check above is only a fast path, so two
+    # concurrent creates of the same name both reach this line. Whoever loses
+    # the link must not overwrite the winner's file.
+    try:
+        yaml_io.atomic_create(file_path, base_content)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=ApiError.make(
+            "job_exists", f"Job '{safe_name}' 已存在")) from exc
+    created_inode = os.stat(file_path).st_ino
     resolved_name = f'{safe_category}/{safe_name}' if safe_category else safe_name
     if recurrence is not None:
         try:
@@ -481,8 +489,16 @@ def create_job(payload: dict, user=Depends(require_editor)):
                                         timezone=recurrence.timezone, missed_policy=recurrence.missed_policy,
                                         max_retries=recurrence.max_retries))
         except Exception:
-            # Creating a job and its requested plan is all-or-nothing to the user.
-            os.remove(file_path)
+            # Creating a job and its requested plan is all-or-nothing to the
+            # user — but only the file this request actually created. An
+            # unconditional remove used to delete the file a concurrent request
+            # had just won with, leaving a plan in SQLite pointing at a job that
+            # no longer existed on disk.
+            try:
+                if os.stat(file_path).st_ino == created_inode:
+                    os.remove(file_path)
+            except OSError:
+                pass
             raise
 
     audit.log("job_create", user=user["username"], target=safe_name, result="success")

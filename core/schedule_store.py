@@ -83,7 +83,15 @@ class ScheduleStore:
         """Open a bounded SQLite transaction; writers serialize before reading."""
         db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
-        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('PRAGMA busy_timeout=10000')
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+        except sqlite3.OperationalError:
+            # Switching the journal mode needs a brief exclusive lock, and two
+            # connections doing it at once makes the loser fail immediately
+            # instead of waiting on the busy handler. The mode is a property of
+            # the file, not of the connection, so the next connect() sees it.
+            pass
         db.execute('PRAGMA synchronous=FULL')
         try:
             if write:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -153,6 +154,38 @@ def save_backup(file_path: str, content: str) -> str:
     except OSError as e:
         raise IOError(f"备份写入失败: {e}")
     return backup_path
+
+
+def atomic_create(file_path: str, content: str):
+    """Create a file that must not already exist, atomically.
+
+    Checking ``os.path.isfile()`` and then renaming loses the race: two
+    concurrent creates both pass the check and the second silently overwrites
+    the first. Linking a fully written temp file makes the publish exclusive, so
+    the loser gets ``FileExistsError`` instead of a clobbered file.
+
+    Raises:
+        FileExistsError: the path is already taken.
+        IOError: any other write failure.
+    """
+    directory = os.path.dirname(file_path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=os.path.basename(file_path) + ".tmp.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.link(tmp_path, file_path)  # atomic and fails if the target exists
+    except FileExistsError:
+        raise
+    except OSError as e:
+        raise IOError(f"写入文件失败: {e}")
+    finally:
+        try:
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 def atomic_write(file_path: str, content: str):
