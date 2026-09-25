@@ -74,6 +74,7 @@ export async function createJob(data: {
   keywords?: string[];
   prompt?: string;
   output?: string;
+  recurrence?: { schedule: string; timezone: string; missed_policy: string; max_retries: number };
 }): Promise<any> {
   return api("/api/jobs", { method: "POST", body: data });
 }

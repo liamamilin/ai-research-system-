@@ -46,6 +46,18 @@ def _schedule_check(state_dir: str) -> dict:
     from web.services.scheduler import schedule_health
 
     report = schedule_health(state_dir=state_dir, repo_dir=os.getcwd())
+    from web.services.managed_scheduler import health_report
+    managed = health_report(state_dir)
+    if managed['jobs']:
+        legacy = report if report.get('jobs') or report.get('orphan_headers') else {'status': 'ok', 'jobs': [], 'detail': ''}
+        severity = {'ok': 0, 'warn': 1, 'unknown': 1, 'error': 2}
+        report = {
+            'status': max((legacy['status'], managed['status']), key=lambda s: severity.get(s, 1)),
+            'detail': '；'.join(filter(None, [managed['detail'], legacy.get('detail')])),
+            'jobs': managed['jobs'] + legacy.get('jobs', []),
+            'overdue': managed['overdue'] + legacy.get('overdue', 0),
+            'paused': managed['paused'] + legacy.get('paused', 0),
+        }
     status_map = {"error": "error", "warn": "warn", "unknown": "warn", "ok": "ok"}
     return {
         "name": "schedule",

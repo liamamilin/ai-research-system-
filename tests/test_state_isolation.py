@@ -18,9 +18,15 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_repo_has_a_real_state_dir_to_protect():
-    """If this fails there is nothing to protect and the test is meaningless."""
-    assert (REPO / "state").is_dir()
-    assert (REPO / "output").is_dir()
+    """If this fails there is nothing to protect and the test is meaningless.
+
+    Both directories are gitignored, so a fresh CI checkout has neither. The
+    rest of the file checks that tests redirect their own writes, which is the
+    property that matters and is verifiable anywhere; this guard only says
+    "you are not running against a live workspace".
+    """
+    if not ((REPO / "state").is_dir() and (REPO / "output").is_dir()):
+        pytest.skip("工作区没有 state/ 与 output/（CI 全新检出），无真实数据可保护")
 
 
 def test_watcher_fixture_redirects_the_index_database(watcher_env):

@@ -231,3 +231,23 @@ describe("JobsList filters", () => {
     await waitFor(() => expect(screen.getByText("3 / 3")).toBeTruthy());
   });
 });
+
+it('registers a recurrence when the new-job checkbox is selected', async () => {
+  const original = globalThis.fetch;
+  const writes: Record<string, unknown>[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST' && url === '/api/jobs') {
+      writes.push(JSON.parse(init.body as string));
+      return jsonResponse({name: 'research/new'});
+    }
+    return original(url, init);
+  }));
+  render(<MemoryRouter><JobsListPage /></MemoryRouter>);
+  fireEvent.click(screen.getByText(/\+ 新建/));
+  fireEvent.change(screen.getByPlaceholderText('如: My Research'), {target: {value: '新增任务'}});
+  fireEvent.click(screen.getByLabelText('创建后自动周期运行'));
+  fireEvent.change(screen.getByLabelText('执行时间'), {target: {value: '09:30'}});
+  fireEvent.click(screen.getByRole('button', {name: '创建'}));
+  await waitFor(() => expect(writes).toHaveLength(1));
+  expect(writes[0].recurrence).toEqual({schedule: '30 9 * * *', timezone: 'local', missed_policy: 'latest', max_retries: 2});
+});

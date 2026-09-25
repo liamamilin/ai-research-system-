@@ -9,6 +9,7 @@ import { TemplateGrid } from "@/components/TemplateGrid";
 import { ErrorState } from "@/components/ErrorState";
 import { errorMessage } from "@/lib/toast";
 import { TemplateLibrary } from "@/components/TemplateLibrary";
+import { CronBuilder } from "@/components/CronBuilder";
 
 function normalizeCategory(value: string): string {
   return value.trim().toLowerCase().replace(/^[\s/]+|[\s/]+$/g, "");
@@ -50,6 +51,8 @@ export function JobsListPage() {
   const [templates, setTemplates] = useState<JobTemplate[]>([]);
   const [creating, setCreating] = useState(false);
   const [createMsg, setCreateMsg] = useState("");
+  const [recurring, setRecurring] = useState(false);
+  const [recurrence, setRecurrence] = useState("0 8 * * *");
   const [form, setForm] = useState({
     name: "", template: "", category: "", description: "",
     language: "zh", keywords: "", prompt: "", output: "",
@@ -124,8 +127,10 @@ export function JobsListPage() {
         keywords: form.keywords.split(",").map((k: string) => k.trim()).filter(Boolean),
         prompt: form.prompt || undefined,
         output: form.output || undefined,
+        ...(recurring ? { recurrence: { schedule: recurrence, timezone: 'local', missed_policy: 'latest', max_retries: 2 } } : {}),
       });
       setShowCreate(false);
+      setRecurring(false);
       const created = form.name.trim();
       setForm({ name: "", template: "", category: "", description: "", language: "zh", keywords: "", prompt: "", output: "" });
       // A new job must be visible: any active filter could hide it, and the
@@ -421,6 +426,10 @@ export function JobsListPage() {
             </div>
           </div>
 
+          {user?.role === 'admin' && <div className="border-t border-border pt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={recurring} onChange={e => setRecurring(e.target.checked)} />创建后自动周期运行</label>
+            {recurring && <><CronBuilder value={recurrence} onChange={setRecurrence} /><p className="text-xs text-text-muted">按本机时区执行。休眠后合并补跑一次，失败最多重试 2 次；关闭页面不影响运行。创建后可在「周期调度」调整策略并查看执行记录。</p></>}
+          </div>}
           {createMsg && <div className="text-sm text-danger">{createMsg}</div>}
           <div className="flex gap-2">
             <button onClick={handleCreate} disabled={creating} className="btn btn-primary">

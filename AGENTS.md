@@ -68,11 +68,13 @@ React SPA → FastAPI → core/engine.py (with cancel_token + progress_cb)
 
 ## Scheduling
 
-Use cron:
-
-```bash
-0 8 * * * cd /path/to/project && python run.py daily_ai_agents
-```
+New recurring plans use `core/schedule_store.py` (SQLite) and the standalone
+`core/schedule_runner.py`, supervised by launchd on macOS. Register a plan through
+Web “周期调度” or the explicit `recurrence` field when creating a job. Run
+`python scripts/install_scheduler.py` to install/verify the dispatcher.
+Do not register new ordinary jobs via cron. Existing cron and the matrix's
+special launchd pipeline remain compatibility paths; see `spec/scheduling.md`.
+Tests must isolate state and mock installation; never touch real user cron/agents.
 
 ## Adding a Job
 

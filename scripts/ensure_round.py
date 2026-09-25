@@ -1,11 +1,12 @@
-"""Catch-up runner: guarantee today's round happens, whoever triggers it.
+"""Daily and catch-up entrypoint: run today's round once it is due.
 
 launchd fires the daily job at 06:00 and a 30-minute interval job that calls
 this script. The interval job is the safety net: if the calendar trigger was
 missed (machine asleep, launchd wedged, a transient failure), the round still
-happens — at most 30 minutes late instead of never.
+happens while the machine is available, subject to budget and execution errors.
 
 Everything here is idempotent. It only starts a round when all of these hold:
+  * today's scheduled time has arrived
   * no round is recorded for today, or today's round did not finish
   * no other pipeline run holds the lock
   * the monthly budget has not been exhausted
@@ -20,10 +21,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, time as wall_time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO not in sys.path:
@@ -111,9 +113,10 @@ def _with_colon_offset(stamp: str) -> str:
 
 
 def budget_ok() -> tuple[bool, str]:
+    """Read the budget without allowing a stalled child to wedge the scheduler."""
     result = subprocess.run(
         [PYTHON, os.path.join(REPO, "run.py"), "--check-budget"],
-        capture_output=True, text=True, cwd=REPO,
+        capture_output=True, text=True, cwd=REPO, timeout=60,
     )
     line = ""
     for candidate in (result.stdout or "").splitlines():
@@ -146,19 +149,34 @@ def heartbeat_age(now: float | None = None) -> float | None:
     return max(0.0, (now if now is not None else time.time()) - checked)
 
 
+def scheduled_time() -> wall_time:
+    """Read the installed daily time so catch-up follows the actual plan."""
+    path = os.path.expanduser("~/Library/LaunchAgents/com.arec.pipeline.daily.plist")
+    try:
+        with open(path, "rb") as fh:
+            spec = plistlib.load(fh)["StartCalendarInterval"]
+        return wall_time(int(spec["Hour"]), int(spec.get("Minute", 0)))
+    except (OSError, ValueError, KeyError, TypeError):
+        return wall_time(6, 0)
+
+
 def decide(*, state: dict | None = None, budget_allowed: bool = True,
-           budget_note: str = "", dry_run: bool = False) -> tuple[bool, str]:
+           budget_note: str = "", dry_run: bool = False,
+           now: datetime | None = None) -> tuple[bool, str]:
     """Whether a round should start now, and why."""
+    due = scheduled_time()
+    if (now or datetime.now()).time() < due:
+        return False, f"尚未到今日计划时间 {due.strftime('%H:%M')}"
     if state is None:
         state = round_state()
-    if state.get("stale"):
-        return True, ("今日轮次标记为 running 但已超时（进程可能被杀），将重跑")
     if state.get("running"):
         return False, "今日轮次正在运行"
     if state.get("finished"):
         return False, f"今日轮次已完成（{state.get('status')}）"
     if not budget_allowed:
         return False, f"预算已用完，跳过本轮（{budget_note}）"
+    if state.get("stale"):
+        return True, ("今日轮次标记为 running 但已超时（进程可能被杀），将重跑")
     reason = "今日无轮次记录" if not state.get("exists") else \
         f"今日轮次未完成（{state.get('status') or 'unknown'}）"
     if dry_run:
@@ -182,7 +200,8 @@ def main() -> int:
                                     dry_run=args.dry_run)
 
     if not should_run:
-        write_heartbeat("skipped", reason)
+        if not args.dry_run:
+            write_heartbeat("skipped", reason)
         print(f"[ensure_round] {reason}")
         return 0
 
@@ -190,7 +209,8 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    # The lock makes this safe when the calendar trigger and the interval
+    # Both installed agents call this entrypoint. The lock makes this safe
+    # when the calendar trigger and the interval
     # trigger land in the same minute: whoever wins, the other exits here.
     from core.fileio import file_lock
 
@@ -208,18 +228,28 @@ def main() -> int:
                     print(f"[ensure_round] 锁内复查：{reason}")
                     return 0
             env = dict(os.environ, AREC_ROUND_TRIGGER=TRIGGER)
-            result = subprocess.run(
-                ["/bin/bash", RUN_SCRIPT], cwd=REPO, env=env)
-            if result.returncode == 0:
+            returncode = run_pipeline(env)
+            if returncode == 0:
                 write_heartbeat("ok", "轮次完成", ran=True)
                 return 0
             write_heartbeat("failed",
-                            f"轮次退出码 {result.returncode}，下个周期会重试")
-            return result.returncode or 1
+                            f"轮次退出码 {returncode}，下个周期会重试")
+            return returncode or 1
     except TimeoutError:
         write_heartbeat("skipped", "另一个触发器正在处理")
         print("[ensure_round] 已有触发器在处理，退出")
         return 0
+
+
+def run_pipeline(env: dict) -> int:
+    """Refresh the heartbeat while a long research round is running."""
+    write_heartbeat("running", "轮次正在运行")
+    with subprocess.Popen(["/bin/bash", RUN_SCRIPT], cwd=REPO, env=env) as process:
+        while True:
+            try:
+                return process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                write_heartbeat("running", "轮次正在运行")
 
 
 if __name__ == "__main__":

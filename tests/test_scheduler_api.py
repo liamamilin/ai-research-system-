@@ -62,3 +62,49 @@ def test_empty_jobs_dir_returns_empty_list(client, web_env):
     r = client.get("/api/scheduler/jobs")
     assert r.status_code == 200
     assert r.json()["jobs"] == []
+
+
+@pytest.fixture
+def isolated_cron(monkeypatch):
+    from web.services import scheduler
+    store = {"lines": ["# unrelated", "MAILTO=somebody", "# cron_id: report", "# 0 8 * * * echo old"]}
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: list(store["lines"]))
+    monkeypatch.setattr(scheduler, "_set_crontab", lambda lines: store.update(lines=list(lines)))
+    return store
+
+
+def test_preview_is_read_only_and_validates(client, isolated_cron):
+    _login(client)
+    before = list(isolated_cron["lines"])
+    r = client.get("/api/scheduler/preview", params={"schedule": "0 8 * * 1-5"})
+    assert r.status_code == 200
+    assert len(r.json()["next_runs"]) == 3
+    assert r.json()["timezone"]
+    assert client.get("/api/scheduler/preview", params={"schedule": "0 25 * * *"}).status_code == 422
+    assert isolated_cron["lines"] == before
+
+
+def test_edit_pause_and_conflict_contract(client, isolated_cron):
+    _login(client)
+    r = client.put("/api/scheduler/report", headers=_csrf(client), json={"schedule": "0 9 * * 1-5", "command": "echo new"})
+    assert r.status_code == 200 and r.json()["enabled"] is False
+    assert isolated_cron["lines"][:2] == ["# unrelated", "MAILTO=somebody"]
+    assert isolated_cron["lines"][-1] == "# 0 9 * * 1-5 echo new"
+    assert client.put("/api/scheduler/report/toggle", headers=_csrf(client), json={"enabled": False}).status_code == 200
+    assert client.put("/api/scheduler/report/toggle", headers=_csrf(client), json={"enabled": "false"}).status_code == 422
+    assert client.post("/api/scheduler", headers=_csrf(client), json={"id": "report", "schedule": "0 9 * * *", "command": "echo x"}).status_code == 422
+    assert client.post("/api/scheduler", headers=_csrf(client), json={"id": "other", "schedule": "0 28 * * *", "command": "echo x"}).status_code == 422
+
+
+def test_launchd_is_visible_but_not_sent_to_cron_mutations(client, isolated_cron, monkeypatch):
+    from web.services import scheduler
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [{
+        "id": "com.arec.pipeline.daily", "backend": "launchd", "hour": "6", "minute": "0",
+        "command": "ensure_round.py", "enabled": True, "loaded": True,
+    }])
+    _login(client)
+    r = client.get("/api/scheduler")
+    assert r.status_code == 200
+    agent = next(j for j in r.json()["jobs"] if j["backend"] == "launchd")
+    assert agent["editable"] is False and agent["next_runs"]
+    assert client.put("/api/scheduler/com.arec.pipeline.daily/toggle", headers=_csrf(client), json={"enabled": False}).status_code == 409

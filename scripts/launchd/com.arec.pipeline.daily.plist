@@ -7,7 +7,7 @@
   Two jobs share one guarantee:
 
     com.arec.pipeline.daily    06:00 every day      — on time
-    com.arec.pipeline.catchup  every 30 minutes    — at worst, half an hour late
+    com.arec.pipeline.catchup  every 30 minutes    — checks missing work while online
 
   The catch-up job runs scripts/ensure_round.py, which is a no-op once today's
   round has finished. cron is deliberately not used: on this machine it accepted
@@ -20,8 +20,8 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/bin/bash</string>
-    <string>@SCRIPT@/run_practical_intelligence.sh</string>
+    <string>@PYTHON@</string>
+    <string>@SCRIPT@/ensure_round.py</string>
   </array>
 
   <key>WorkingDirectory</key>
@@ -33,8 +33,6 @@
          "someone ran it by hand": the missed-run detector relies on it. -->
     <key>AREC_ROUND_TRIGGER</key>
     <string>launchd</string>
-    <key>PATH</key>
-    <string>/Users/milin/2026/AI_research/.AI_research/bin:/Users/milin/.nvm/versions/node/v22.21.1/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 
   <key>StartCalendarInterval</key>

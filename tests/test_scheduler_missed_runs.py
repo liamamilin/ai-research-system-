@@ -6,6 +6,11 @@ import pytest
 
 from web.services import scheduler
 
+
+@pytest.fixture(autouse=True)
+def isolate_launchd(monkeypatch):
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [])
+
 DAILY_6AM = {
     "id": "practical_ai_intelligence",
     "minute": "0",
@@ -274,9 +279,17 @@ def test_a_manual_round_does_not_satisfy_the_cron_watchdog(tmp_path):
     assert "不能证明" in result["detail"]
 
 
-def test_a_cron_round_does_satisfy_the_watchdog(tmp_path):
+def test_a_cron_round_does_satisfy_the_watchdog(tmp_path, monkeypatch):
     import json
     import os
+
+    # The watchdog asks the real crontab and the real launchd whether the
+    # command is installed; both are this machine's business, not the test's.
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
+        "# cron_id: practical_ai_intelligence",
+        "0 6 * * * bash scripts/run_practical_intelligence.sh",
+    ])
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [])
 
     state = tmp_path / "state"
     state.mkdir()
@@ -292,16 +305,19 @@ def test_a_cron_round_does_satisfy_the_watchdog(tmp_path):
     assert result["status"] == "ok"
 
 
-def test_a_header_without_a_schedule_line_is_reported(monkeypatch):
+def test_a_header_without_a_schedule_line_is_reported(tmp_path, monkeypatch):
     """A rewritten crontab can keep the comment and lose the schedule."""
     monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
         "# Practical AI Intelligence - daily 06:00",
         "# cron_id: practical_ai_intelligence",
         "",
     ])
+    # On a machine that runs launchd, the real agents would be discovered here
+    # and mask the truncated crontab this test is about.
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [])
     assert scheduler.orphan_headers() == ["practical_ai_intelligence"]
 
-    report = scheduler.schedule_health(state_dir="state", repo_dir=".")
+    report = scheduler.schedule_health(state_dir=str(tmp_path), repo_dir=str(tmp_path))
     assert report["status"] == "error"
     assert "只剩注释头" in report["detail"]
     assert report["orphan_headers"] == ["practical_ai_intelligence"]
@@ -313,3 +329,33 @@ def test_healthy_crontab_has_no_orphan_headers(monkeypatch):
         "0 6 * * * bash a.sh",
     ])
     assert scheduler.orphan_headers() == []
+
+
+def test_individual_job_does_not_borrow_pipeline_evidence(tmp_path):
+    import json
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "pipeline_rounds.json").write_text(json.dumps({"2026-09-24": {
+        "date": "2026-09-24", "status": "success", "trigger": "cron",
+        "finished_at": "2026-09-24T06:30:00",
+    }}))
+    job = dict(DAILY_6AM, command="python run.py some_other_job >> logs/cron_other.log 2>&1")
+    result = scheduler.classify_jobs([job], state_dir=str(state), repo_dir=str(tmp_path), now=datetime(2026, 9, 24, 12))[0]
+    assert result["status"] == "unverified"
+
+
+def test_frequent_schedule_cannot_hide_forever_in_grace_window(monkeypatch):
+    monkeypatch.setattr(scheduler, "_evidence_for", lambda *args: {"at": "2026-09-24T06:00:00", "kind": "log"})
+    job = dict(DAILY_6AM, minute="*/15", hour="*")
+    result = scheduler.classify_jobs([job], now=datetime(2026, 9, 24, 12))[0]
+    assert result["status"] == "overdue"
+
+
+def test_catchup_heartbeat_does_not_certify_daily_trigger(tmp_path):
+    import json
+    now = datetime(2026, 9, 25, 12)
+    (tmp_path / "scheduler_heartbeat.json").write_text(json.dumps({"checked_at": now.timestamp(), "status": "ok"}))
+    jobs = [{"id": f"com.arec.pipeline.{kind}", "backend": "launchd", "enabled": True, "loaded": True, "hour": "6", "minute": "0"} for kind in ("daily", "catchup")]
+    states = scheduler._classify_launchd(jobs, str(tmp_path), now)
+    assert states[0]["status"] == "unverified"
+    assert states[1]["status"] == "ok"

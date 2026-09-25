@@ -8,12 +8,40 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import re
 import subprocess
 import time
 import tempfile
+from functools import wraps
 from datetime import datetime, timedelta
 from typing import Optional
+
+from core import cron
+from core.fileio import file_lock
+
+
+class ScheduleConflict(ValueError):
+    """A schedule with this ID already exists."""
+
+
+def _serialized(func):
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        # crontab is shared by all projects belonging to the same OS user.
+        path = os.path.join(tempfile.gettempdir(), f"arec-crontab-{os.getuid()}")
+        with file_lock(path):
+            return func(*args, **kwargs)
+    return wrapped
+
+
+def _validate_job(job_id: str, schedule: str, command: str) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", job_id):
+        raise ValueError("调度 ID 仅支持字母、数字、下划线、点和短横线，最长 128 字符")
+    if not command.strip() or any(c in command for c in "\n\r\x00"):
+        raise ValueError("执行命令不能为空或包含换行")
+    cron.preview(schedule)
+    return cron.parse_schedule(schedule)
 
 _CRON_LINE_RE = re.compile(
     r"^\s*"
@@ -98,7 +126,9 @@ def _parse_cron_entry(line: str) -> Optional[dict]:
 
     raw = m.groupdict()
     fields = [raw["min"], raw["hour"], raw["dom"], raw["month"], raw["dow"]]
-    if not all(_CRON_FIELD_RE.match(f) for f in fields):
+    try:
+        cron.parse_schedule(" ".join(fields))
+    except ValueError:
         return None
 
     return {
@@ -155,6 +185,7 @@ def _find_job_lines(lines: list[str], job_id: str) -> list[int]:
     return []
 
 
+@_serialized
 def add_job(
     job_id: str,
     schedule: str,
@@ -169,16 +200,14 @@ def add_job(
 
     Returns the created job dict.
     """
-    fields = schedule.strip().split()
-    if len(fields) != 5:
-        raise ValueError("schedule 必须为 5 字段 cron 表达式")
+    fields = list(_validate_job(job_id, schedule, command).values())
 
     lines = _get_crontab()
     # Check for duplicate id (exact match)
     for line in lines:
         m = _CRON_ID_RE.match(line)
         if m and m.group(1) == job_id:
-            raise ValueError(f"job_id '{job_id}' 已存在")
+            raise ScheduleConflict(f"job_id '{job_id}' 已存在")
 
     lines.append(f"# cron_id: {job_id}")
     lines.append(f"{' '.join(fields)} {command}")
@@ -197,6 +226,21 @@ def add_job(
     }
 
 
+@_serialized
+def update_job(job_id: str, schedule: str, command: str) -> dict | None:
+    """Edit in place, preserving paused state and unrelated crontab entries."""
+    entry = _validate_job(job_id, schedule, command)
+    lines = _get_crontab()
+    indices = _find_job_lines(lines, job_id)
+    if len(indices) < 2:
+        return None
+    enabled = not lines[indices[-1]].strip().startswith("#")
+    lines[indices[-1]] = ("" if enabled else "# ") + " ".join(entry.values()) + " " + command
+    _set_crontab(lines)
+    return {**entry, "id": job_id, "command": command, "enabled": enabled}
+
+
+@_serialized
 def remove_job(job_id: str) -> bool:
     """Remove a cron entry by id. Returns True if removed."""
     lines = _get_crontab()
@@ -212,6 +256,7 @@ def remove_job(job_id: str) -> bool:
     return True
 
 
+@_serialized
 def toggle_job(job_id: str, enabled: bool) -> bool:
     """Enable or disable a scheduled job by commenting/uncommenting its command line.
 
@@ -239,7 +284,7 @@ def toggle_job(job_id: str, enabled: bool) -> bool:
         _set_crontab(lines)
         return True
 
-    return False  # already in desired state
+    return True  # idempotent: the schedule exists and is already in this state
 
 
 # ----- Missed-run detection -------------------------------------------------
@@ -256,7 +301,7 @@ _DOW_NAMES = {d: i for i, d in enumerate(
 # after this much slack.
 GRACE_MINUTES = 120
 # How far back to look for an expected fire time.
-LOOKBACK_HOURS = 96
+LOOKBACK_HOURS = 366 * 24
 
 
 def _resolve(part: str, names: Optional[dict]) -> int:
@@ -271,52 +316,26 @@ def _resolve(part: str, names: Optional[dict]) -> int:
 def _field_matches(field: str, value: int, low: int, high: int,
                    names: Optional[dict] = None) -> bool:
     """Standard 5-field cron matching (numbers, lists, ranges, steps, names)."""
-    for part in (field or "*").split(","):
-        step = 1
-        if "/" in part:
-            part, _, raw_step = part.partition("/")
-            if not raw_step.isdigit() or int(raw_step) < 1:
-                return False
-            step = int(raw_step)
-        if part in ("*", ""):
-            start, end = low, high
-        elif "-" in part.lstrip("-"):
-            start_s, _, end_s = part.partition("-")
-            start, end = _resolve(start_s, names), _resolve(end_s, names)
-            if start < 0 or end < 0:
-                return False
-        else:
-            resolved = _resolve(part, names)
-            if resolved < 0:
-                return False
-            start = resolved if step == 1 else resolved
-            end = resolved if step == 1 else high
-        if value < low or value > high:
-            continue
-        if start <= value <= end and (value - start) % step == 0:
-            return True
-    return False
+    try:
+        return value in cron.field_values(field, low, high, names)
+    except ValueError:
+        return False
 
 
 def _matches(entry: dict, moment: "datetime") -> bool:
-    dow = (moment.weekday() + 1) % 7  # cron: Sunday = 0
-    return (
-        _field_matches(entry["minute"], moment.minute, 0, 59)
-        and _field_matches(entry["hour"], moment.hour, 0, 23)
-        and _field_matches(entry["day_of_month"], moment.day, 1, 31)
-        and _field_matches(entry["month"], moment.month, 1, 12, _MONTH_NAMES)
-        and _field_matches(entry["day_of_week"], dow, 0, 7, _DOW_NAMES)
-    )
+    return last_fire_before(entry, moment, lookback_hours=1) == moment.replace(second=0, microsecond=0)
 
 
 def last_fire_before(entry: dict, when: "datetime",
                      lookback_hours: int = LOOKBACK_HOURS) -> Optional["datetime"]:
     """The most recent minute at which this schedule should have fired."""
-    cursor = when.replace(second=0, microsecond=0)
-    for _ in range(max(1, lookback_hours) * 60):
-        if _matches(entry, cursor):
-            return cursor
-        cursor -= timedelta(minutes=1)
+    try:
+        slots = cron.fire_times(entry, when, count=1, backwards=True,
+                                days=max(1, lookback_hours // 24 + 1))
+    except ValueError:
+        return None
+    if slots and when - slots[0] < timedelta(hours=lookback_hours):
+        return slots[0]
     return None
 
 
@@ -368,7 +387,7 @@ def _pipeline_evidence(command: str, state_dir: str, repo_dir: str) -> Optional[
 
 def _evidence_for(job: dict, state_dir: str, repo_dir: str) -> Optional[dict]:
     command = job.get("command", "")
-    if "run_practical_intelligence" in command or "run.py" in command:
+    if "run_practical_intelligence" in command:
         return _pipeline_evidence(command, state_dir, repo_dir)
     # Other jobs: their own log file, when the command redirects into logs/.
     match = re.search(r">>?\s*(?:logs/)?([\w.-]+\.log)", command)
@@ -418,7 +437,7 @@ def _parse_iso(value: str) -> Optional["datetime"]:
 def classify_jobs(jobs: list[dict], state_dir: str = "state",
                   repo_dir: str = ".", now: Optional["datetime"] = None) -> list[dict]:
     """Classify every cron job: ok / paused / overdue / unverified / no_schedule."""
-    moment = _as_aware(now or datetime.now())
+    moment = _as_aware(now or cron.local_now())
     results: list[dict] = []
     for job in jobs:
         entry = job
@@ -451,7 +470,6 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             continue
         if not evidence.get("cron_evidence", True):
             result["status"] = "unverified"
-            result["status"] = "unverified"
             result["last_ran_at"] = evidence["at"]
             result["evidence"] = evidence
             result["detail"] = (
@@ -469,13 +487,13 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             result["evidence"] = evidence
             results.append(result)
             continue
-        deadline = expected + timedelta(minutes=GRACE_MINUTES)
+        overdue_slot = last_fire_before(entry, moment - timedelta(minutes=GRACE_MINUTES))
         result["last_ran_at"] = evidence["at"]
         result["evidence"] = evidence
         if ran_at >= expected:
             result["status"] = "ok"
             result["detail"] = f"最近一次实际运行：{ran_at.strftime('%m-%d %H:%M')}"
-        elif moment <= deadline:
+        elif overdue_slot is None or ran_at >= overdue_slot:
             # The slot is still inside the grace window: the run may simply be
             # slow (model latency, retries) rather than missing.
             result["status"] = "ok"
@@ -509,7 +527,17 @@ def list_launchd_agents() -> list[dict]:
     """
     agents: list[dict] = []
     for label in LAUNCHD_LABELS:
-        info: dict = {"id": label, "backend": "launchd", "label": label}
+        path = os.path.expanduser(f"~/Library/LaunchAgents/{label}.plist")
+        config = {}
+        try:
+            with open(path, "rb") as fh:
+                config = plistlib.load(fh)
+        except (OSError, ValueError):
+            pass
+        if not isinstance(config, dict):
+            config = {}
+        info: dict = {"id": label, "backend": "launchd", "label": label,
+                      "installed": bool(config)}
         try:
             result = subprocess.run(
                 ["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
@@ -517,8 +545,13 @@ def list_launchd_agents() -> list[dict]:
         except (OSError, subprocess.SubprocessError):
             continue
         if result.returncode != 0:
+            if not config:
+                continue
+            calendar = config.get("StartCalendarInterval", {})
             info.update({"loaded": False, "enabled": False, "minute": "", "hour": "",
-                         "command": "", "interval_seconds": 0})
+                         "command": "ensure_round.py", "interval_seconds": config.get("StartInterval", 0)})
+            if isinstance(calendar, dict):
+                info.update(hour=str(calendar.get("Hour", "")), minute=str(calendar.get("Minute", "")))
             agents.append(info)
             continue
         text = result.stdout
@@ -550,16 +583,21 @@ def list_launchd_agents() -> list[dict]:
                 if digits:
                     interval = int(digits)
         # "not running" is the normal state between calendar fires.
-        loaded = state in ("running", "waiting", "not running")
+        loaded = True  # a successful launchctl print proves the agent is loaded
+        calendar = config.get("StartCalendarInterval", {})
+        if isinstance(calendar, dict):
+            hour = hour or str(calendar.get("Hour", ""))
+            minute = minute or str(calendar.get("Minute", ""))
         info.update({
             "loaded": loaded,
             "enabled": loaded,
+            "state": state,
             "minute": minute,
             "hour": hour,
             "run_at_load": "RunAtLoad" in text,
-            "interval_seconds": interval,
-            "command": ("run_practical_intelligence.sh"
-                        if label.endswith("daily") else "ensure_round.py"),
+            "interval_seconds": interval or config.get("StartInterval", 0),
+            "command": (" ".join(config.get("ProgramArguments", [])) or ("run_practical_intelligence.sh"
+                        if label.endswith("daily") else "ensure_round.py")),
         })
         agents.append(info)
     return agents
@@ -567,11 +605,19 @@ def list_launchd_agents() -> list[dict]:
 
 def all_jobs() -> list[dict]:
     """Every schedule that can trigger work: crontab entries and launchd agents."""
-    jobs = list_jobs()
+    error = None
+    try:
+        jobs = [{**job, "backend": "cron", "editable": True} for job in list_jobs()]
+    except (RuntimeError, OSError) as exc:
+        error = exc
+        jobs = []
     for agent in list_launchd_agents():
-        if not agent.get("loaded"):
-            continue
-        jobs.append({**agent, "schedule_type": "launchd"})
+        jobs.append({**agent, "schedule_type": "launchd", "editable": False})
+    if error and not jobs:
+        raise error
+    if error:
+        for job in jobs:
+            job["discovery_warning"] = f"cron 无法读取：{error}"
     return jobs
 
 
@@ -596,7 +642,7 @@ def orphan_headers() -> list[str]:
     return orphans
 
 
-def _classify_launchd(jobs: list[dict], state_dir: str) -> list[dict]:
+def _classify_launchd(jobs: list[dict], state_dir: str, now: datetime | None = None) -> list[dict]:
     """Status of the launchd agents, judged by the catch-up heartbeat."""
     heartbeat = {}
     path = os.path.join(state_dir, "scheduler_heartbeat.json")
@@ -606,10 +652,12 @@ def _classify_launchd(jobs: list[dict], state_dir: str) -> list[dict]:
     except (OSError, ValueError):
         heartbeat = {}
 
+    if not isinstance(heartbeat, dict):
+        heartbeat = {}
     checked = heartbeat.get("checked_at")
     age = None
     if isinstance(checked, (int, float)):
-        age = max(0.0, time.time() - checked)
+        age = max(0.0, (now.timestamp() if now else time.time()) - checked)
     stale_after = 40 * 60
 
     results: list[dict] = []
@@ -629,6 +677,10 @@ def _classify_launchd(jobs: list[dict], state_dir: str) -> list[dict]:
         if not job.get("loaded"):
             entry["status"] = "paused"
             entry["detail"] = "agent 未加载，launchd 不会执行它"
+        elif job["id"].endswith(".daily"):
+            # The catch-up heartbeat cannot prove that the daily agent fired.
+            entry["status"] = "unverified"
+            entry["detail"] = "每日触发器已加载；运行结果请查看轮次，补漏状态见补偿任务"
         elif age is None:
             entry["status"] = "unverified"
             entry["detail"] = "尚无调度器心跳，无法判断是否在派发"
@@ -648,13 +700,14 @@ def _classify_launchd(jobs: list[dict], state_dir: str) -> list[dict]:
 
 
 def schedule_health(state_dir: str = "state", repo_dir: str = ".",
-                     now: Optional["datetime"] = None) -> dict:
+                     now: Optional["datetime"] = None, jobs: list[dict] | None = None) -> dict:
     """Aggregate schedule state for the health report."""
     try:
-        jobs = all_jobs()
+        jobs = all_jobs() if jobs is None else jobs
     except Exception as exc:  # noqa: BLE001 - crontab may be unavailable
         return {"status": "unknown", "detail": f"无法读取调度任务：{exc}", "jobs": []}
-    if not jobs:
+    orphans = orphan_headers()
+    if not jobs and not orphans:
         return {
             "status": "error",
             "detail": "没有任何调度任务：crontab 为空，且 launchd agent 未加载",
@@ -666,8 +719,7 @@ def schedule_health(state_dir: str = "state", repo_dir: str = ".",
             [job for job in jobs if job.get("backend") != "launchd"],
             state_dir=state_dir, repo_dir=repo_dir, now=now)
     ]
-    classified.extend(_classify_launchd(jobs, state_dir))
-    orphans = orphan_headers()
+    classified.extend(_classify_launchd(jobs, state_dir, now))
     overdue = [j for j in classified if j["status"] == "overdue"]
     paused = [j for j in classified if j["status"] == "paused"]
     if orphans:
@@ -684,8 +736,35 @@ def schedule_health(state_dir: str = "state", repo_dir: str = ".",
         status = "warn"
         detail = (f"{len(paused)} 个调度任务处于暂停状态，不会自动运行："
                   + "、".join(j["id"] for j in paused))
+    elif any(j["status"] in ("unverified", "no_schedule") for j in classified):
+        status = "warn"
+        detail = "部分任务尚无独立运行证据，请查看各任务状态"
     else:
         status = "ok"
         detail = f"{len(classified)} 个调度任务均无漏跑迹象" if classified else "crontab 中没有调度任务"
+    if any(job.get("discovery_warning") for job in jobs):
+        status = "error" if status == "error" else "warn"
+        detail += "；cron 读取失败，调度列表可能不完整"
     return {"status": status, "detail": detail, "jobs": classified,
             "overdue": len(overdue), "paused": len(paused)}
+
+
+def describe_job(job: dict) -> dict:
+    """Attach display metadata without pretending an interval has a fixed phase."""
+    result = dict(job)
+    if job.get("backend") == "launchd":
+        daily = job["id"].endswith(".daily")
+        result["title"] = "情报矩阵 · 每日运行" if daily else "情报矩阵 · 漏跑补偿"
+        result["schedule_label"] = (f"每天 {int(job['hour']):02d}:{int(job['minute']):02d}"
+                                    if daily and job.get("hour") and job.get("minute")
+                                    else f"每 {job.get('interval_seconds', 0) // 60} 分钟检查")
+        result["next_runs"] = []
+        if daily and job.get("hour") and job.get("minute") and job.get("enabled"):
+            result["next_runs"] = cron.preview(f"{job['minute']} {job['hour']} * * *")["next_runs"]
+    else:
+        result["schedule"] = " ".join(str(job[key]) for key in cron.KEYS)
+        try:
+            result["next_runs"] = cron.preview(result["schedule"])["next_runs"] if job.get("enabled") else []
+        except ValueError:
+            result["next_runs"] = []
+    return result

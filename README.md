@@ -142,7 +142,7 @@ python scripts/export_round_artifacts.py --all        # every round
 - 假死服务（占着端口但不响应）→ 先按 `state/server.pid` 回收旧进程再重启
 - **闲置自动退出**：30 分钟没有任何页面操作、且当前没有任务在跑 → 自动关闭 App
   （活动由 Web 服务写入 `state/app_activity.env`：每次登录态请求刷新一次，
-  任务启动/结束时更新运行数。周期调度不受影响——cron 由系统拥有，与本 App 无关）
+  任务启动/结束时更新运行数。周期调度不受影响——launchd / cron 由系统管理，与本 App 无关）
 - **看门狗**：每 60s 检查 `/api/health`，连续 30 分钟无响应则自动关闭 App
 - 退出 App **不会**停止服务（服务以 nohup 分离运行），下次点击重新接管
 - 服务输出写入 `logs/app_launcher.log`
@@ -324,14 +324,28 @@ FastAPI server
 - **Report search**: SQLite FTS5 indexes all `.md` files in `output/`; incremental `watchfiles` watcher; results include highlighted snippets.
 - **Optional cleanup**: a cheap model can post-process the report (`extraction.enabled: true`) — disabled by default since API output is already clean.
 
-## Scheduling (CLI)
+## 周期调度
 
-Use system cron:
+新增任意可运行的 job 时，管理员可勾选 **「创建后自动周期运行」**；已有 job 则在
+「周期调度」选择任务和时间。支持常用频率、五字段 cron、逐任务时区，以及保存前的
+三次执行预览。无需配置 shell 命令。
+
+新计划使用 **独立执行器 + SQLite 持久化记录 + launchd 自动恢复**。创建时自动安装并
+验证真实心跳，也可以提前运行：
 
 ```bash
-# Daily 8 AM
-0 8 * * * cd /path/to/project && python run.py daily_ai_agents
+python scripts/install_scheduler.py
 ```
+
+- 关闭页面、退出 App、重启 Web 不影响调度；同一 job 不重叠执行。
+- 休眠或执行器中断后，默认合并补跑最新一次；也可选择跳过。
+- 失败默认最多重试 2 次；每次尝试、原因和实际生成的报告都有记录。
+- 暂停只影响后续执行；恢复从下个计划时间开始。删除 job 会同步移除计划。
+- 电脑需开机且登录；关机/休眠期间不能准点运行。全天准点需求使用常开服务器。
+
+已有 cron 兼容编辑，情报矩阵的专用 launchd 每日/补偿入口继续保留；新计划不再写 cron。
+YAML 模板中的 `schedule` 是提示，需通过上述入口明确启用。其他平台需用系统服务托管
+执行器。安装、执行语义、故障恢复和真实系统验收见 [调度说明](spec/scheduling.md)。
 
 ## Deployment
 

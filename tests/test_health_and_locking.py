@@ -474,3 +474,39 @@ def test_missing_scheduler_heartbeat_is_a_warning(env):
     check = _by_name(_run(env), "scheduler")
     assert check["status"] == "warn"
     assert "心跳" in check["detail"]
+
+
+def test_parallel_lock_acquisition_has_only_one_winner(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from core import lock
+    monkeypatch.setattr(lock, '_LOCK_DIR', str(tmp_path / 'locks'))
+    barrier = threading.Barrier(8)
+    def acquire(index):
+        manager = lock.LockManager('scheduled', owner_id=f'owner-{index}')
+        barrier.wait()
+        return manager, manager.acquire()
+    with ThreadPoolExecutor(8) as pool:
+        results = list(pool.map(acquire, range(8)))
+    assert sum(acquired for _, acquired in results) == 1
+    for manager, acquired in results:
+        if acquired:
+            manager.release()
+
+
+def test_dead_worker_lock_recovered_but_live_long_job_keeps_lock(tmp_path, monkeypatch):
+    from core import lock
+    monkeypatch.setattr(lock, '_LOCK_DIR', str(tmp_path / 'locks'))
+    first = lock.LockManager('scheduled', owner_id='first')
+    assert first.acquire()
+    payload = json.loads(open(first.lock_path).read())
+    payload['started_at'] = time.time() - 99999
+    fileio.atomic_write(first.lock_path, json.dumps(payload))
+    second = lock.LockManager('scheduled', owner_id='second', stale_after=1)
+    assert not second.acquire()
+    def dead(*_):
+        raise ProcessLookupError()
+    monkeypatch.setattr(lock.os, 'kill', dead)
+    assert second.acquire()
+    first.release()  # Old owner cannot release the replacement's lock.
+    assert os.path.exists(second.lock_path)
+    second.release()

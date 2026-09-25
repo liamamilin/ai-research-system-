@@ -5,9 +5,8 @@ Lock files are stored in ``state/locks/<job_safe_name>.lock``, each
 containing a JSON payload with the PID and start time.
 
 Stale detection:
-  If a lock file is older than ``stale_after`` seconds it is considered
-  orphaned (e.g. from a crash) and automatically released on the next
-  acquisition attempt.
+  Live owner PIDs retain their lock. Dead owners are reclaimed immediately;
+  legacy records without a PID fall back to ``stale_after``.
 """
 
 import os
@@ -73,35 +72,35 @@ class LockManager:
         raises ``LockAcquireError`` when acquisition fails.
         """
         _ensure_lock_dir()
-        payload = self._read_lock()
-
-        if payload is not None:
-            # Same owner → re-entrant, allow
-            if payload.get("owner_id") == self._owner_id:
-                logger.debug("Lock re-acquired by same owner '%s' for '%s'",
-                             self._owner_id, self.job_name)
-                self._released = False
-                return True
-
-            if self._is_stale(payload):
-                logger.warning(
-                    "Lock for '%s' is stale (age=%ds), releasing.",
-                    self.job_name,
-                    int(time.time() - payload["started_at"]),
-                )
-                self._force_release()
-            else:
-                logger.info(
-                    "Job '%s' is already running (PID %s, started at %s).",
-                    self.job_name,
-                    payload["pid"],
-                    time.strftime(
-                        "%Y-%m-%dT%H:%M:%S", time.localtime(payload["started_at"])
-                    ),
-                )
-                return False
-
         with file_lock(self.lock_path):
+            payload = self._read_lock()
+
+            if payload is not None:
+                # Same owner → re-entrant, allow
+                if payload.get("owner_id") == self._owner_id:
+                    logger.debug("Lock re-acquired by same owner '%s' for '%s'",
+                                 self._owner_id, self.job_name)
+                    self._released = False
+                    return True
+
+                if self._is_stale(payload):
+                    logger.warning(
+                        "Lock for '%s' is stale (age=%ds), releasing.",
+                        self.job_name,
+                        int(time.time() - payload["started_at"]),
+                    )
+                    self._force_release()
+                else:
+                    logger.info(
+                        "Job '%s' is already running (PID %s, started at %s).",
+                        self.job_name,
+                        payload["pid"],
+                        time.strftime(
+                            "%Y-%m-%dT%H:%M:%S", time.localtime(payload["started_at"])
+                        ),
+                    )
+                    return False
+
             self._write_lock()
         logger.debug("Lock acquired for '%s' at %s", self.job_name, self.lock_path)
         return True
@@ -112,9 +111,10 @@ class LockManager:
         if self._released:
             return
         # Only release if we still own it (check again for stale detection)
-        payload = self._read_lock()
-        if payload and payload.get("owner_id") == self._owner_id:
-            self._force_release()
+        with file_lock(self.lock_path):
+            payload = self._read_lock()
+            if payload and payload.get("owner_id") == self._owner_id:
+                self._force_release()
         self._released = True
         logger.debug("Lock released for '%s'", self.job_name)
 
@@ -129,10 +129,7 @@ class LockManager:
                 payload = json.load(f)
         except (json.JSONDecodeError, OSError):
             return False
-        age = time.time() - payload.get("started_at", 0)
-        if age > _DEFAULT_STALE:
-            return False
-        return True
+        return not cls(job_name)._is_stale(payload)
 
     @classmethod
     def force_release(cls, job_name: str):
@@ -190,5 +187,13 @@ class LockManager:
             pass
 
     def _is_stale(self, payload: dict) -> bool:
-        age = time.time() - payload.get("started_at", 0)
-        return age > self.stale_after
+        pid = payload.get('pid')
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, 0)
+                return False  # A live owner must not lose its lock just because time passed.
+            except ProcessLookupError:
+                return True  # A crashed worker can retry immediately.
+            except PermissionError:
+                return False
+        return time.time() - payload.get('started_at', 0) > self.stale_after

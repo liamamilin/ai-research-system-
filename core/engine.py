@@ -104,8 +104,7 @@ class ResearchEngine:
         usage: Optional[dict] = None
 
         try:
-            with LockManager(job_name, stale_after=stale_after,
-                             owner_id=str(os.getpid())):
+            with LockManager(job.get("_file", job_name), stale_after=stale_after):
 
                 if self._cancel.is_set():
                     raise CancelledError("Job cancelled before start")

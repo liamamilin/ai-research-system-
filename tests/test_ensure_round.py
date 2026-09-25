@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, time as wall_time
 
 import pytest
 
@@ -18,6 +19,7 @@ def state(tmp_path, monkeypatch):
     monkeypatch.setattr(ensure_round, "STATE_DIR", str(directory))
     monkeypatch.setattr(ensure_round, "HEARTBEAT", str(directory / "scheduler_heartbeat.json"))
     monkeypatch.setattr(ensure_round, "ROUNDS", str(directory / "pipeline_rounds.json"))
+    monkeypatch.setattr(ensure_round, "scheduled_time", lambda: wall_time(0, 0))
     return directory
 
 
@@ -100,7 +102,7 @@ def test_a_stale_running_round_is_retried(state):
     with open(ensure_round.ROUNDS, "w", encoding="utf-8") as fh:
         json.dump({"2026-09-25": {
             "date": "2026-09-25", "status": "running", "trigger": "launchd",
-            "started_at": "2026-09-25T00:30:00+0800",
+            "started_at": datetime.fromtimestamp(time.time() - 4 * 3600).astimezone().isoformat(),
         }}, fh)
     info = ensure_round.round_state("2026-09-25")
     assert info["stale"] is True
@@ -121,3 +123,50 @@ def test_a_fresh_running_round_is_not_retried(state):
     should_run, reason = ensure_round.decide(state=info)
     assert should_run is False
     assert "正在运行" in reason
+
+
+def test_catchup_waits_for_the_daily_time(state, monkeypatch):
+    monkeypatch.setattr(ensure_round, "scheduled_time", lambda: wall_time(6, 0))
+    assert ensure_round.decide(state={"exists": False}, now=datetime(2026, 9, 25, 5, 59))[0] is False
+    assert ensure_round.decide(state={"exists": False}, now=datetime(2026, 9, 25, 6, 0))[0] is True
+
+
+def test_stale_running_does_not_bypass_budget(state):
+    should_run, reason = ensure_round.decide(state={"stale": True}, budget_allowed=False)
+    assert not should_run and "预算" in reason
+
+
+def test_dry_run_does_not_write_heartbeat_even_when_skipped(state, monkeypatch):
+    monkeypatch.setattr(ensure_round.sys, "argv", ["ensure_round.py", "--dry-run"])
+    monkeypatch.setattr(ensure_round, "budget_ok", lambda: (False, "exhausted"))
+    assert ensure_round.main() == 0
+    assert not (state / "scheduler_heartbeat.json").exists()
+
+
+def test_long_round_refreshes_heartbeat(state, monkeypatch):
+    beats = []
+    monkeypatch.setattr(ensure_round, "write_heartbeat", lambda status, detail: beats.append(status))
+    class Process:
+        calls = 0
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def wait(self, timeout):
+            self.calls += 1
+            if self.calls == 1:
+                raise ensure_round.subprocess.TimeoutExpired("test", timeout)
+            return 0
+    monkeypatch.setattr(ensure_round.subprocess, "Popen", lambda *a, **kw: Process())
+    assert ensure_round.run_pipeline({}) == 0
+    assert beats == ["running", "running"]
+
+
+def test_daily_and_catchup_share_the_idempotent_entrypoint():
+    from pathlib import Path
+    import plistlib
+    directory = Path(ensure_round.REPO) / "scripts" / "launchd"
+    for name in ("daily", "catchup"):
+        with (directory / f"com.arec.pipeline.{name}.plist").open("rb") as fh:
+            spec = plistlib.load(fh)
+        assert spec["ProgramArguments"] == ["@PYTHON@", "@SCRIPT@/ensure_round.py"]

@@ -450,12 +450,45 @@ def create_job(payload: dict, user=Depends(require_editor)):
     else:
         base_content = _default_job_yaml(name, description, language, keywords, prompt, output)
 
+    parsed = yaml_io.parse_yaml(base_content)
+    output_errors = yaml_io.validate_output_path(parsed, output_root=settings.paths.output_dir)
+    if output_errors:
+        raise HTTPException(status_code=422, detail=ApiError.make('invalid_output', '；'.join(output_errors)))
+
+    recurrence = payload.get('recurrence')
+    if recurrence is not None:
+        if user['role'] != 'admin':
+            raise HTTPException(status_code=403, detail=ApiError.make('forbidden', '创建周期计划需要管理员权限'))
+        from web.routes.scheduler import ScheduleCreate, _mutate
+        from pydantic import ValidationError
+        from web.services import managed_scheduler as managed
+        try:
+            if not isinstance(recurrence, dict):
+                raise ValueError('recurrence 必须是对象')
+            recurrence = ScheduleCreate(**recurrence)
+            managed.preview(recurrence.schedule, recurrence.timezone)
+            if recurrence.missed_policy not in ('latest', 'skip') or not 0 <= recurrence.max_retries <= 5:
+                raise ValueError('补跑或重试策略无效')
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(status_code=422, detail=ApiError.make('invalid_schedule', str(exc))) from exc
+        _mutate(managed.ensure_online)
+
     yaml_io.atomic_write(file_path, base_content)
+    resolved_name = f'{safe_category}/{safe_name}' if safe_category else safe_name
+    if recurrence is not None:
+        try:
+            _mutate(lambda: managed.save(resolved_name, recurrence.schedule,
+                                        timezone=recurrence.timezone, missed_policy=recurrence.missed_policy,
+                                        max_retries=recurrence.max_retries))
+        except Exception:
+            # Creating a job and its requested plan is all-or-nothing to the user.
+            os.remove(file_path)
+            raise
 
     audit.log("job_create", user=user["username"], target=safe_name, result="success")
 
     # Load back and return
-    job = load_job(settings.paths.jobs_dir, safe_name)
+    job = load_job(settings.paths.jobs_dir, resolved_name)
     if job:
         return _summary(job)
     return {"ok": True, "path": file_path}
@@ -480,18 +513,12 @@ def _load_template_content(tmpl_dir: str, template_name: str) -> str:
 
 def _default_job_yaml(name: str, description: str, language: str, keywords: list, prompt: str, output: str) -> str:
     """Generate a default job YAML content."""
-    kw = "\n  - " + "\n  - ".join(keywords) if keywords else ""
-    out = output or f"output/{{date}}_{name.replace(' ', '_')}.md"
-    prompt_text = prompt or "Research {name}. Keywords: {keywords}. Language: {language}.\nGenerate a report in Markdown."
-    return f"""name: "{name}"
-description: "{description}"
-enabled: true
-keywords:{kw}
-language: "{language}"
-prompt: |
-  {prompt_text}
-output: "{out}"
-"""
+    return yaml_io.dump_yaml({
+        'name': name, 'description': description, 'enabled': True,
+        'keywords': keywords or [], 'language': language,
+        'prompt': prompt or 'Research {name}. Keywords: {keywords}. Language: {language}.\nGenerate a report in Markdown.',
+        'output': output or f"output/{{date}}_{name.replace(' ', '_')}.md",
+    })
 
 
 @router.get("/{name:path}/state", response_model=Optional[JobState])
@@ -915,7 +942,11 @@ def delete_job(name: str, request: Request, user=Depends(require_editor)):
         logger.warning("Could not back up %s before delete: %s", rel, exc)
 
     try:
+        from core.schedule_store import ScheduleStore
+        ScheduleStore(settings.paths.state_dir).delete_for_job(rel)
         os.remove(deleted_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=ApiError.make('already_running', str(exc))) from exc
     except OSError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
