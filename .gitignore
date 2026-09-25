@@ -18,6 +18,10 @@ env/
 *.app
 scripts/.launcher.rendered.applescript
 scripts/.start_server.rendered.sh
+# Rendered copies a test writes next to the original (it must live there: the
+# script derives the project directory from $0). A crashed run leaves them
+# behind with this machine's absolute paths in them.
+scripts/.*.test.sh
 
 # Logs
 logs/
