@@ -409,6 +409,27 @@ def _as_aware(moment: "datetime") -> "datetime":
     return moment.astimezone() if moment.tzinfo is None else moment
 
 
+def _on_run_clock(slot: Optional["datetime"], ran_at: Optional["datetime"]
+                  ) -> Optional["datetime"]:
+    """Restate a machine-local schedule slot in the run's own timezone.
+
+    cron and launchd fire on local wall clock, and the offset on a round's
+    timestamp is the wall clock that job actually ran on. Comparing the two as
+    raw instants therefore reports a 06:00 run as eight hours late whenever the
+    machine's timezone is not the one the round was recorded in — which is
+    every UTC CI runner, and any laptop that travels. The wall clock is kept
+    and only the zone is re-tagged; converting the instant instead would move
+    the slot and hide a genuinely late run.
+    """
+    if slot is None or ran_at is None:
+        return slot
+    if slot.tzinfo is None or ran_at.tzinfo is None:
+        return slot
+    if slot.utcoffset() == ran_at.utcoffset():
+        return slot
+    return slot.replace(tzinfo=ran_at.tzinfo)
+
+
 def _sort_key(value: str) -> float:
     """Comparable epoch for a timestamp; unparseable values sort oldest."""
     parsed = _parse_iso(value)
@@ -488,12 +509,16 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
             results.append(result)
             continue
         overdue_slot = last_fire_before(entry, moment - timedelta(minutes=GRACE_MINUTES))
+        # Judge the slot against the clock the run was recorded on, not against
+        # whatever timezone this machine happens to be in right now.
+        slot_for_run = _on_run_clock(expected, ran_at)
+        grace_for_run = _on_run_clock(overdue_slot, ran_at)
         result["last_ran_at"] = evidence["at"]
         result["evidence"] = evidence
-        if ran_at >= expected:
+        if ran_at >= slot_for_run:
             result["status"] = "ok"
             result["detail"] = f"最近一次实际运行：{ran_at.strftime('%m-%d %H:%M')}"
-        elif overdue_slot is None or ran_at >= overdue_slot:
+        elif grace_for_run is None or ran_at >= grace_for_run:
             # The slot is still inside the grace window: the run may simply be
             # slow (model latency, retries) rather than missing.
             result["status"] = "ok"

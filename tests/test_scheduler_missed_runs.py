@@ -305,6 +305,72 @@ def test_a_cron_round_does_satisfy_the_watchdog(tmp_path, monkeypatch):
     assert result["status"] == "ok"
 
 
+def test_a_run_is_judged_on_the_clock_it_was_recorded_on(tmp_path, monkeypatch):
+    """A 06:00 run stays on time when the machine is in another timezone.
+
+    cron and launchd fire on local wall clock. The round carries "+0800"; the
+    machine here reports 20:00 in UTC-8, so the 06:00 slot computed from the
+    machine is eight hours away from the run and the watchdog called a
+    successful round eight hours late. Every UTC CI runner hit this.
+    """
+    import json
+    import os
+    from datetime import timedelta, timezone
+
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
+        "# cron_id: practical_ai_intelligence",
+        "0 6 * * * bash scripts/run_practical_intelligence.sh",
+    ])
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [])
+
+    state = tmp_path / "state"
+    state.mkdir()
+    with open(os.path.join(state, "pipeline_rounds.json"), "w", encoding="utf-8") as fh:
+        json.dump({"2026-09-24": {
+            "date": "2026-09-24", "status": "success", "trigger": "cron",
+            "finished_at": "2026-09-24T06:24:16+0800",
+        }}, fh)
+
+    elsewhere = datetime(2026, 9, 24, 20, 0,
+                         tzinfo=timezone(timedelta(hours=-8)))
+    result = scheduler.classify_jobs([DAILY_6AM], state_dir=str(state),
+                                     repo_dir=str(tmp_path), now=elsewhere)[0]
+    assert result["status"] == "ok"
+
+
+def test_a_genuinely_late_run_is_still_overdue_in_another_timezone(tmp_path, monkeypatch):
+    """Fixing the clock comparison must not excuse a round that never ran.
+
+    The only evidence is yesterday's, so today's 06:00 slot has nothing behind
+    it — and re-tagging the slot must not pull yesterday's run forward onto
+    today's schedule.
+    """
+    import json
+    import os
+    from datetime import timedelta, timezone
+
+    monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
+        "# cron_id: practical_ai_intelligence",
+        "0 6 * * * bash scripts/run_practical_intelligence.sh",
+    ])
+    monkeypatch.setattr(scheduler, "list_launchd_agents", lambda: [])
+
+    state = tmp_path / "state"
+    state.mkdir()
+    with open(os.path.join(state, "pipeline_rounds.json"), "w", encoding="utf-8") as fh:
+        json.dump({"2026-09-23": {
+            "date": "2026-09-23", "status": "success", "trigger": "cron",
+            "finished_at": "2026-09-23T09:00:00+0800",
+        }}, fh)
+
+    elsewhere = datetime(2026, 9, 24, 20, 0,
+                         tzinfo=timezone(timedelta(hours=-8)))
+    result = scheduler.classify_jobs([DAILY_6AM], state_dir=str(state),
+                                     repo_dir=str(tmp_path), now=elsewhere)[0]
+    assert result["status"] == "overdue"
+    assert "最近一次实际运行" in result["detail"]
+
+
 def test_a_header_without_a_schedule_line_is_reported(tmp_path, monkeypatch):
     """A rewritten crontab can keep the comment and lose the schedule."""
     monkeypatch.setattr(scheduler, "_get_crontab", lambda: [
