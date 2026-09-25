@@ -98,6 +98,41 @@ def index_file(output_dir: str, rel_path: str) -> bool:
         return False
 
 
+def index_missing(output_dir: str, known: set[str] | None = None) -> list[str]:
+    """Index markdown files on disk that the index does not have yet.
+
+    The watcher is event-driven, and a filesystem notification can be missed:
+    the file appears while the watching thread is still starting, an editor
+    writes through a rename, a container bind mount delivers changes late. A
+    prune-only reconcile would delete the stale rows but never notice the
+    missing report, so it would stay invisible in search until the next server
+    start.
+
+    Returns the relative paths that were added.
+    """
+    output_path = Path(output_dir)
+    if not output_path.is_dir():
+        return []
+    if known is None:
+        known = index_db.indexed_paths()
+
+    added: list[str] = []
+    for root, dirs, files in os.walk(output_path):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            if os.path.splitext(fn)[1].lower() not in _INDEXED_EXT:
+                continue
+            rel = os.path.relpath(os.path.join(root, fn), output_path)
+            if rel in known:
+                continue
+            if index_file(output_dir, rel):
+                added.append(rel)
+    if added:
+        logger.info("Reconcile indexed %d report(s) missed by file events: %s",
+                    len(added), ", ".join(added[:5]))
+    return added
+
+
 def full_scan(output_dir: str) -> dict:
     """Walk entire output_dir and index all markdown files.
 

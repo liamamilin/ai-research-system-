@@ -78,6 +78,34 @@ def _handle_change(change_type, change_path: str, output_dir: str) -> bool:
 HEARTBEAT_NAME = "watcher.json"
 
 
+def reconcile_once(output_dir: str) -> dict:
+    """Bring the index back in line with what is actually on disk.
+
+    Both directions matter. Stale rows are dropped so a deleted report stops
+    showing up, and reports whose file event was missed are added so a report
+    that exists is searchable — a prune-only pass would leave the second kind
+    invisible until the server restarted.
+    """
+    from web.indexer import db as index_db
+    from web.indexer import scanner as index_scanner
+    from web.indexer import vector_sync
+
+    result = {"added": 0, "pruned": 0, "fts_orphans": 0, "added_paths": []}
+    try:
+        added = index_scanner.index_missing(output_dir)
+        result["added"] = len(added)
+        result["added_paths"] = added
+        for rel in added:
+            vector_sync.sync_report(output_dir, rel)
+        result["pruned"] = index_db.prune_missing(output_dir)
+        result["fts_orphans"] = index_db.prune_fts_orphans()
+        if result["pruned"] or result["fts_orphans"]:
+            vector_sync.prune_orphans(output_dir)
+    except Exception as exc:  # noqa: BLE001 - never kill the watcher
+        logger.warning("Index reconciliation failed: %s", exc)
+    return result
+
+
 def heartbeat_path(state_dir: str = "state") -> str:
     return os.path.join(state_dir, HEARTBEAT_NAME)
 
@@ -140,22 +168,9 @@ def start_watcher(
                          started_at=datetime.now().astimezone().isoformat(timespec="seconds"))
         return threading.Thread(target=lambda: None, daemon=True)
 
-    def _reconcile() -> None:
-        """Self-heal missed delete events."""
-        from web.indexer import db as index_db
-        from web.indexer import vector_sync
-
-        try:
-            removed = index_db.prune_missing(output_dir)
-            fts_orphans = index_db.prune_fts_orphans()
-            if removed:
-                logger.info("Reconciled %d stale report index row(s)", removed)
-            if fts_orphans:
-                logger.info("Reconciled %d orphan full-text row(s)", fts_orphans)
-            if removed or fts_orphans:
-                vector_sync.prune_orphans(output_dir)
-        except Exception as exc:  # noqa: BLE001 - never kill the watcher
-            logger.warning("Index reconciliation failed: %s", exc)
+    def _reconcile() -> dict:
+        """Self-heal both missed deletions and missed creations."""
+        return reconcile_once(output_dir)
 
     def _watch():
         logger.info("Starting file watcher for: %s", output_dir)
@@ -206,8 +221,15 @@ def start_watcher(
 
                 if time.time() >= next_reconcile:
                     next_reconcile = time.time() + reconcile_seconds
-                    _reconcile()
+                    recovered = _reconcile()
                     stats["reconciles"] += 1
+                    if recovered["added"]:
+                        # Recovered by reconcile, not by an event: report it
+                        # the same way so the heartbeat does not imply the
+                        # event stream caught everything.
+                        stats["indexed"] += recovered["added"]
+                        stats["last_event_at"] = (datetime.now().astimezone()
+                                                  .isoformat(timespec="seconds"))
                     stats["last_reconcile_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
                     beat()
         except Exception as exc:  # noqa: BLE001 - surface watcher death

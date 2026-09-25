@@ -203,6 +203,12 @@ def upsert_report(
             )
 
 
+def indexed_paths() -> set[str]:
+    """Every report path currently in the index."""
+    with connect() as conn:
+        return {row["path"] for row in conn.execute("SELECT path FROM reports")}
+
+
 def prune_missing(output_dir: str) -> int:
     """Drop index rows whose report file no longer exists on disk.
 

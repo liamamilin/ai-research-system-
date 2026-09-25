@@ -129,6 +129,74 @@ def test_reconcile_prunes_rows_for_vanished_files(watcher_env):
     assert paths == ["research/kept.md"]
 
 
+def test_reconcile_indexes_a_report_whose_file_event_was_missed(watcher_env):
+    """A missed create must not leave a report unsearchable until restart.
+
+    The file appears without the watcher seeing it (thread still starting, an
+    editor's rename, a late bind mount). Reconciliation used to only delete
+    stale rows, so the new report stayed invisible in search for good.
+    """
+    from web.indexer import db as index_db
+    from web.indexer import scanner as index_scanner
+    from web.indexer import watcher
+
+    output = str(watcher_env.output)
+    _write(output, "research/known.md")
+    index_scanner.index_file(output, "research/known.md")
+    # Written straight to disk: no event, no index row.
+    _write(output, "research/missed.md", "# missed\n\nbody the watcher never saw\n")
+
+    result = watcher.reconcile_once(output)
+
+    assert result["added"] == 1
+    assert result["added_paths"] == ["research/missed.md"]
+    paths = {i["path"] for i in index_db.list_reports(page=1, per_page=10)["items"]}
+    assert paths == {"research/known.md", "research/missed.md"}
+    # And it is actually searchable, not merely present as a row.
+    assert [h["path"] for h in index_db.search_reports("never saw", limit=5)] == [
+        "research/missed.md"]
+
+
+def test_reconcile_is_idempotent(watcher_env):
+    from web.indexer import watcher
+
+    output = str(watcher_env.output)
+    _write(output, "research/one.md")
+    assert watcher.reconcile_once(output)["added"] == 1
+    # The second pass has nothing left to do: re-indexing on every tick would
+    # rewrite every row in the database forever.
+    second = watcher.reconcile_once(output)
+    assert second["added"] == 0 and second["pruned"] == 0
+
+
+def test_reconcile_still_prunes_and_keeps_both_directions(watcher_env):
+    from web.indexer import db as index_db
+    from web.indexer import scanner as index_scanner
+    from web.indexer import watcher
+
+    output = str(watcher_env.output)
+    _write(output, "research/kept.md")
+    _write(output, "research/gone.md")
+    for rel in ("research/kept.md", "research/gone.md"):
+        index_scanner.index_file(output, rel)
+    os.remove(os.path.join(output, "research/gone.md"))
+    _write(output, "research/new.md")
+
+    result = watcher.reconcile_once(output)
+
+    assert (result["added"], result["pruned"]) == (1, 1)
+    assert [i["path"] for i in index_db.list_reports(page=1, per_page=10)["items"]] == [
+        "research/new.md", "research/kept.md"]
+
+
+def test_reconcile_survives_a_broken_output_dir(watcher_env):
+    """A bad pass must report, never raise: the watcher thread depends on it."""
+    from web.indexer import watcher
+
+    result = watcher.reconcile_once(str(watcher_env.output / "does-not-exist"))
+    assert result["added"] == 0 and result["pruned"] == 0
+
+
 def test_prune_missing_is_noop_when_all_present(watcher_env):
     from web.indexer import db as index_db
     from web.indexer import scanner as index_scanner
