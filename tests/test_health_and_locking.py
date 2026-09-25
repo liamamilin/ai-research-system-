@@ -67,6 +67,15 @@ def _make_full_reports_db(path: str, output_dir: str) -> None:
         conn.close()
 
 
+def _write_scheduler_heartbeat(env, age_seconds: float = 0, **fields) -> None:
+    import time as _time
+    payload = {"status": "ok", "detail": "今日轮次已完成（success）",
+               "checked_at": _time.time() - age_seconds, "last_run": _time.time()}
+    payload.update(fields)
+    with open(os.path.join(env["state"], "scheduler_heartbeat.json"), "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+
 def _write_heartbeat(env, **fields) -> None:
     payload = {
         "started_at": "2026-09-24T06:00:00+0800",
@@ -117,6 +126,7 @@ def _by_name(result, name):
 
 def test_clean_environment_is_healthy(env):
     _write_heartbeat(env)  # the server runs a watcher
+    _write_scheduler_heartbeat(env)  # the launchd catch-up is dispatching
     result = _run(env)
     assert result["status"] == "ok"
     assert result["errors"] == [] and result["warnings"] == []
@@ -436,3 +446,31 @@ def test_index_freshness_flags_orphan_fts_rows(env):
     assert check["status"] == "warn"
     assert check["fts_orphans"] == 1
     assert "orphan full-text" in check["detail"]
+
+
+def test_scheduler_heartbeat_flags_a_dead_scheduler(env):
+    """A scheduler that stops dispatching must be an error, not a quiet morning."""
+    import time as _time
+
+    # Fresh heartbeat: the mechanism is provably alive.
+    _write_scheduler_heartbeat(env)
+    check = _by_name(_run(env), "scheduler")
+    assert check["status"] == "ok"
+
+    # Nothing has checked in for an hour: launchd is no longer dispatching.
+    _write_scheduler_heartbeat(env, age_seconds=3600)
+    check = _by_name(_run(env), "scheduler")
+    assert check["status"] == "error"
+    assert "未心跳" in check["detail"]
+
+    # A fresh heartbeat with a failed catch-up is a warning, not silence.
+    _write_scheduler_heartbeat(env, status="failed", detail="轮次退出码 1")
+    check = _by_name(_run(env), "scheduler")
+    assert check["status"] == "warn"
+    assert "补漏失败" in check["detail"]
+
+
+def test_missing_scheduler_heartbeat_is_a_warning(env):
+    check = _by_name(_run(env), "scheduler")
+    assert check["status"] == "warn"
+    assert "心跳" in check["detail"]

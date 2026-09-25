@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AREC daily intelligence pipeline.
+
+  Install with scripts/install_launchd.sh, which substitutes the paths below.
+  Two jobs share one guarantee:
+
+    com.arec.pipeline.daily    06:00 every day      — on time
+    com.arec.pipeline.catchup  every 30 minutes    — at worst, half an hour late
+
+  The catch-up job runs scripts/ensure_round.py, which is a no-op once today's
+  round has finished. cron is deliberately not used: on this machine it accepted
+  a crontab and then never executed a single job, including a per-minute probe.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arec.pipeline.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@SCRIPT@/run_practical_intelligence.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- The round registry must say "an external scheduler fired me", not
+         "someone ran it by hand": the missed-run detector relies on it. -->
+    <key>AREC_ROUND_TRIGGER</key>
+    <string>launchd</string>
+    <key>PATH</key>
+    <string>/Users/milin/2026/AI_research/.AI_research/bin:/Users/milin/.nvm/versions/node/v22.21.1/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- A machine asleep at 06:00 gets the round when it wakes, instead of
+       silently skipping the day. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/launchd_daily.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/launchd_daily.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

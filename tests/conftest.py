@@ -90,6 +90,10 @@ def web_env(tmp_path, monkeypatch, _password_hashes):
     # pipeline made the suite fail on the machine's own cron state.
     from web.services import scheduler as scheduler_service
 
+    # launchctl would otherwise report this machine's real agents, so a test
+    # would depend on whether the pipeline is currently installed.
+    monkeypatch.setattr(scheduler_service, "list_launchd_agents", lambda: [])
+
     monkeypatch.setattr(
         scheduler_service, "_get_crontab",
         lambda: [

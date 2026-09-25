@@ -193,6 +193,43 @@ def _index_freshness(output_dir: str, state_dir: str) -> dict:
                   content_drift_detectable=has_stamps)
 
 
+SCHEDULER_HEARTBEAT_STALE_SECONDS = 40 * 60
+
+
+def _scheduler_heartbeat(state_dir: str) -> dict:
+    """Is the scheduler still dispatching?
+
+    The pipeline is run by an external agent (launchd). If that agent stops
+    dispatching, the round silently does not happen and the only symptom is a
+    missing report the next morning. The catch-up script writes this heartbeat
+    on every check, so a stale one means the scheduler is dead *now*.
+    """
+    path = os.path.join(state_dir, "scheduler_heartbeat.json")
+    if not os.path.isfile(path):
+        return _check("scheduler", WARN, "尚无调度器心跳：catch-up 任务未运行过")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return _check("scheduler", WARN, f"调度器心跳不可读: {exc}")
+    checked = data.get("checked_at")
+    if not isinstance(checked, (int, float)):
+        return _check("scheduler", WARN, "调度器心跳缺少时间戳")
+    age = max(0.0, time.time() - checked)
+    last_run = data.get("last_run_iso") or ""
+    if age > SCHEDULER_HEARTBEAT_STALE_SECONDS:
+        return _check("scheduler", ERROR,
+                      f"调度器 {int(age // 60)} 分钟未心跳，agent 可能已失效"
+                      + (f"；最近一次运行 {last_run}" if last_run else ""),
+                      age_seconds=int(age), last_run=last_run)
+    if data.get("status") == "failed":
+        return _check("scheduler", WARN, f"上一次补漏失败：{data.get('detail', '')}",
+                      age_seconds=int(age), last_run=last_run)
+    return _check("scheduler", OK,
+                  f"调度器正常（{int(age)} 秒前心跳）：{data.get('detail', '')}",
+                  age_seconds=int(age), last_run=last_run)
+
+
 def _watcher_heartbeat(state_dir: str) -> dict:
     """The index watcher's own report on itself.
 
@@ -314,6 +351,7 @@ def run_checks(state_dir: str = "state", output_dir: str = "output",
         checks.append(_index_freshness(output_dir, state_dir))
         checks.append(_watcher_heartbeat(state_dir))
         checks.append(_vector_coverage(state_dir))
+        checks.append(_scheduler_heartbeat(state_dir))
         checks.append(_last_round(state_dir))
 
     statuses = {c["status"] for c in checks}

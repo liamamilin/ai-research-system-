@@ -6,9 +6,11 @@ Works on macOS and Linux.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
+import time
 import tempfile
 from datetime import datetime, timedelta
 from typing import Optional
@@ -357,7 +359,7 @@ def _pipeline_evidence(command: str, state_dir: str, repo_dir: str) -> Optional[
     # the pipeline works, and nothing about cron — counting it would let a broken
     # schedule stay "healthy" forever as long as someone ran it manually.
     cron_signals = [s for s in signals
-                    if s.get("trigger") == "cron" or s.get("kind") == "log"]
+                    if s.get("trigger") in ("cron", "launchd") or s.get("kind") == "log"]
     newest = dict(max(cron_signals or signals, key=lambda s: _sort_key(s["at"])))
     newest["all_signals"] = signals
     newest["cron_evidence"] = bool(cron_signals)
@@ -494,6 +496,85 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
     return results
 
 
+LAUNCHD_LABELS = ("com.arec.pipeline.daily", "com.arec.pipeline.catchup")
+
+
+def list_launchd_agents() -> list[dict]:
+    """The launchd agents that trigger the pipeline.
+
+    launchd replaced cron here: it dispatches reliably on this machine, runs
+    jobs missed while the machine slept, and can be inspected. Reading the
+    agents means the schedule page and the watchdog see the real triggers
+    instead of an empty crontab.
+    """
+    agents: list[dict] = []
+    for label in LAUNCHD_LABELS:
+        info: dict = {"id": label, "backend": "launchd", "label": label}
+        try:
+            result = subprocess.run(
+                ["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
+                capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if result.returncode != 0:
+            info.update({"loaded": False, "enabled": False, "minute": "", "hour": "",
+                         "command": "", "interval_seconds": 0})
+            agents.append(info)
+            continue
+        text = result.stdout
+        lines = text.splitlines()
+        # The first "state = " is the agent's own; deeper ones belong to nested
+        # structures, and taking the last one reported "active" for everything.
+        state = ""
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("state = "):
+                state = stripped.split("=", 1)[1].strip()
+                break
+        hour = minute = ""
+        interval = 0
+        # launchctl prints the calendar interval twice: as a stream declaration
+        # ("Minute" => 0) and as a dict ("Minute" => 0). Both look the same.
+        for i, line in enumerate(lines):
+            if "calendarinterval" in line.lower() or "StartCalendarInterval" in line:
+                for w in lines[i:i + 14]:
+                    if '"hour"' in w.lower() and "=>" in w:
+                        hour = w.split("=>")[-1].strip().rstrip(",")
+                    if '"minute"' in w.lower() and "=>" in w:
+                        minute = w.split("=>")[-1].strip().rstrip(",")
+                if hour != "" and minute != "":
+                    break
+        for line in lines:
+            if "run interval" in line.lower():
+                digits = "".join(ch for ch in line.split("=")[-1] if ch.isdigit())
+                if digits:
+                    interval = int(digits)
+        # "not running" is the normal state between calendar fires.
+        loaded = state in ("running", "waiting", "not running")
+        info.update({
+            "loaded": loaded,
+            "enabled": loaded,
+            "minute": minute,
+            "hour": hour,
+            "run_at_load": "RunAtLoad" in text,
+            "interval_seconds": interval,
+            "command": ("run_practical_intelligence.sh"
+                        if label.endswith("daily") else "ensure_round.py"),
+        })
+        agents.append(info)
+    return agents
+
+
+def all_jobs() -> list[dict]:
+    """Every schedule that can trigger work: crontab entries and launchd agents."""
+    jobs = list_jobs()
+    for agent in list_launchd_agents():
+        if not agent.get("loaded"):
+            continue
+        jobs.append({**agent, "schedule_type": "launchd"})
+    return jobs
+
+
 def orphan_headers() -> list[str]:
     """cron_id headers whose command line is gone.
 
@@ -515,14 +596,77 @@ def orphan_headers() -> list[str]:
     return orphans
 
 
+def _classify_launchd(jobs: list[dict], state_dir: str) -> list[dict]:
+    """Status of the launchd agents, judged by the catch-up heartbeat."""
+    heartbeat = {}
+    path = os.path.join(state_dir, "scheduler_heartbeat.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            heartbeat = json.load(fh)
+    except (OSError, ValueError):
+        heartbeat = {}
+
+    checked = heartbeat.get("checked_at")
+    age = None
+    if isinstance(checked, (int, float)):
+        age = max(0.0, time.time() - checked)
+    stale_after = 40 * 60
+
+    results: list[dict] = []
+    for job in jobs:
+        if job.get("backend") != "launchd":
+            continue
+        entry = {
+            "id": job["id"],
+            "backend": "launchd",
+            "enabled": bool(job.get("enabled")),
+            "schedule": (f"{int(job['hour']):02d}:{int(job['minute']):02d}"
+                         if job.get("hour") and job.get("minute")
+                         else (f"每 {job['interval_seconds'] // 60} 分钟"
+                               if job.get("interval_seconds") else "未知")),
+            "command": job.get("command", ""),
+        }
+        if not job.get("loaded"):
+            entry["status"] = "paused"
+            entry["detail"] = "agent 未加载，launchd 不会执行它"
+        elif age is None:
+            entry["status"] = "unverified"
+            entry["detail"] = "尚无调度器心跳，无法判断是否在派发"
+        elif age > stale_after:
+            entry["status"] = "overdue"
+            entry["detail"] = f"调度器 {int(age // 60)} 分钟未心跳，agent 可能已失效"
+        elif heartbeat.get("status") == "failed":
+            entry["status"] = "overdue"
+            entry["detail"] = f"上一次补漏失败：{heartbeat.get('detail', '')}"
+        else:
+            entry["status"] = "ok"
+            entry["detail"] = f"{int(age)} 秒前心跳：{heartbeat.get('detail', '')}"
+            if heartbeat.get("last_run_iso"):
+                entry["last_ran_at"] = heartbeat["last_run_iso"]
+        results.append(entry)
+    return results
+
+
 def schedule_health(state_dir: str = "state", repo_dir: str = ".",
                      now: Optional["datetime"] = None) -> dict:
     """Aggregate schedule state for the health report."""
     try:
-        jobs = list_jobs()
+        jobs = all_jobs()
     except Exception as exc:  # noqa: BLE001 - crontab may be unavailable
-        return {"status": "unknown", "detail": f"无法读取 crontab：{exc}", "jobs": []}
-    classified = classify_jobs(jobs, state_dir=state_dir, repo_dir=repo_dir, now=now)
+        return {"status": "unknown", "detail": f"无法读取调度任务：{exc}", "jobs": []}
+    if not jobs:
+        return {
+            "status": "error",
+            "detail": "没有任何调度任务：crontab 为空，且 launchd agent 未加载",
+            "jobs": [], "overdue": 0, "paused": 0,
+        }
+    # A launchd agent's own heartbeat is its evidence, not the round registry.
+    classified = [
+        j for j in classify_jobs(
+            [job for job in jobs if job.get("backend") != "launchd"],
+            state_dir=state_dir, repo_dir=repo_dir, now=now)
+    ]
+    classified.extend(_classify_launchd(jobs, state_dir))
     orphans = orphan_headers()
     overdue = [j for j in classified if j["status"] == "overdue"]
     paused = [j for j in classified if j["status"] == "paused"]

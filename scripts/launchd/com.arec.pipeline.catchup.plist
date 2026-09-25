@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  AREC catch-up check. Every 30 minutes it asks "did today's round already
+  happen?" and starts one if not. That is what makes the pipeline independent of
+  any single trigger: kill this agent, the daily one still fires at 06:00; let
+  the daily one be missed, this one picks it up.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arec.pipeline.catchup</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@SCRIPT@/ensure_round.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <!-- Check once right after login or reboot, so a machine that was off all
+       morning still gets its round. -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/launchd_catchup.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/launchd_catchup.err.log</string>
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
