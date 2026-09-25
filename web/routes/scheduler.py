@@ -199,7 +199,14 @@ def execution_history(job_id: str, user=Depends(require_admin)):
     storage = managed.store()
     plan = storage.get(job_id)
     from core.schedule_store import iso
-    timezone = plan['timezone'] if plan else 'local'
-    return {'runs': [{**run, 'due_at_iso': iso(run['due_at'], timezone),
-                      'started_at_iso': iso(run['started_at'], timezone)}
+
+    def stamp(run: dict, field: str) -> str | None:
+        # The run carries the zone it was scheduled in. After the plan is gone
+        # there is nothing left to ask, and falling back to the server's local
+        # zone would shift every timestamp by the difference.
+        timezone = run.get('timezone') or (plan['timezone'] if plan else 'local')
+        return iso(run[field], timezone)
+
+    return {'runs': [{**run, 'due_at_iso': stamp(run, 'due_at'),
+                      'started_at_iso': stamp(run, 'started_at')}
                      for run in storage.runs(job_id)]}

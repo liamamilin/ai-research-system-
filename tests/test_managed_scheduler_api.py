@@ -223,3 +223,63 @@ def test_a_new_plan_is_not_reported_as_verified(admin):
     state = next(s for s in listing['health']['jobs'] if s['id'] == managed_job['id'])
     assert state['status'] == 'unverified'
     assert '尚未执行过' in state['detail']
+
+
+def test_history_keeps_its_timezone_after_the_plan_is_deleted(admin):
+    """History outlives its plan, so each run must remember its own zone.
+
+    Rendering a stored epoch needs a timezone. Once the plan is gone there is
+    nothing left to ask, and the old fallback to the server's local zone
+    silently shifted every timestamp of an Asia/Shanghai plan.
+    """
+    client, _, headers, _ = admin
+    assert create(admin).status_code == 201
+    plan_id = ScheduleStore(managed.store().state_dir).list()[0]['id']
+
+    storage = managed.store()
+    # A due slot becomes a queued run, without executing anything.
+    storage.enqueue_due(now=storage.get(plan_id)['next_run_at'] + 1)
+    assert storage.runs(plan_id), "expected one queued run for the history test"
+
+    assert client.delete(f'/api/scheduler/{plan_id}', headers=headers).status_code == 200
+    assert storage.get(plan_id) is None
+
+    history = client.get(f'/api/scheduler/{plan_id}/runs', headers=headers).json()
+    assert history['runs'], "history must survive plan deletion"
+    assert history['runs'][0]['due_at_iso'].endswith('+08:00')
+    assert history['runs'][0]['timezone'] == 'Asia/Shanghai'
+
+
+def test_runs_created_before_the_migration_keep_their_plan_timezone(client, web_env,
+                                                                   monkeypatch, admin):
+    """An older schedules.db has no timezone column; history must still be right."""
+    import sqlite3
+
+    assert create(admin).status_code == 201
+    storage = managed.store()
+    plan_id = storage.list()[0]['id']
+    storage.enqueue_due(now=storage.get(plan_id)['next_run_at'] + 1)
+
+    # Rebuild the table the way an old install looks: no timezone column.
+    with sqlite3.connect(storage.path) as db:
+        db.execute("ALTER TABLE schedule_runs RENAME TO schedule_runs_old")
+        db.execute('''CREATE TABLE schedule_runs (
+            id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, job_name TEXT NOT NULL,
+            version INTEGER NOT NULL, due_at REAL NOT NULL, status TEXT NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 0, max_retries INTEGER NOT NULL,
+            ready_at REAL NOT NULL, lease_until REAL, pid INTEGER,
+            started_at REAL, finished_at REAL, error TEXT NOT NULL DEFAULT '',
+            output_path TEXT, created_at REAL NOT NULL,
+            UNIQUE(schedule_id, version, due_at))''')
+        columns = ('id, schedule_id, job_name, version, due_at, status, attempt, max_retries, '
+                   'ready_at, lease_until, pid, started_at, finished_at, error, output_path, created_at')
+        db.execute(f"INSERT INTO schedule_runs ({columns}) "
+                   f"SELECT {columns} FROM schedule_runs_old")
+        db.execute("DROP TABLE schedule_runs_old")
+    with sqlite3.connect(storage.path) as raw:
+        old_columns = {row[1] for row in raw.execute('PRAGMA table_info(schedule_runs)')}
+    assert 'timezone' not in old_columns, "the fixture must look like an old install"
+
+    reopened = ScheduleStore(storage.state_dir)  # migration runs here
+    runs = reopened.runs(plan_id)
+    assert runs and runs[0]['timezone'] == 'Asia/Shanghai', "existing history lost its zone"

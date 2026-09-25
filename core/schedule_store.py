@@ -65,7 +65,7 @@ class ScheduleStore:
                     attempt INTEGER NOT NULL DEFAULT 0, max_retries INTEGER NOT NULL,
                     ready_at REAL NOT NULL, lease_until REAL, pid INTEGER,
                     started_at REAL, finished_at REAL, error TEXT NOT NULL DEFAULT '',
-                    output_path TEXT, created_at REAL NOT NULL,
+                    output_path TEXT, created_at REAL NOT NULL, timezone TEXT NOT NULL DEFAULT '',
                     UNIQUE(schedule_id, version, due_at)
                 );
                 CREATE INDEX IF NOT EXISTS run_status ON schedule_runs(status, ready_at);
@@ -77,6 +77,25 @@ class ScheduleStore:
                 );
                 CREATE TABLE IF NOT EXISTS scheduler_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             ''')
+        self._migrate_runs_timezone()
+
+    def _migrate_runs_timezone(self):
+        """Stamp each run with the plan timezone it was scheduled in.
+
+        History outlives its plan, and the API renders a stored epoch in a
+        timezone. Without this column a deleted plan's runs fall back to the
+        server's local zone, silently reinterpreting "03:00 in Asia/Shanghai" as
+        a different moment. Old rows are backfilled from the plan they belong
+        to, so existing history keeps its original zone.
+        """
+        with self.connect() as db:
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(schedule_runs)")}
+            if "timezone" in columns:
+                return
+            db.execute("ALTER TABLE schedule_runs ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
+            for plan in db.execute("SELECT id, timezone FROM schedules").fetchall():
+                db.execute("UPDATE schedule_runs SET timezone=? WHERE schedule_id=? AND timezone=''",
+                           (plan["timezone"], plan["id"]))
 
     @contextmanager
     def connect(self, write: bool = False):
@@ -213,11 +232,12 @@ class ScheduleStore:
                 due = max(plan['next_run_at'], slot(plan['schedule'], now, plan['timezone'], backwards=True))
                 skipped = plan['missed_policy'] == 'skip' and now - due >= 60
                 db.execute('''INSERT OR IGNORE INTO schedule_runs
-                    (id,schedule_id,job_name,version,due_at,status,max_retries,ready_at,created_at,error,finished_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-                    (uuid.uuid4().hex, plan['id'], plan['job_name'], plan['version'], due,
-                     'skipped' if skipped else 'queued', plan['max_retries'], now, now,
-                     '已按策略跳过错过的计划' if skipped else '', now if skipped else None))
+                    (id,schedule_id,job_name,version,due_at,status,max_retries,ready_at,created_at,error,finished_at,timezone)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                           (uuid.uuid4().hex, plan['id'], plan['job_name'], plan['version'], due,
+                            'skipped' if skipped else 'queued', plan['max_retries'], now, now,
+                            '已按策略跳过错过的计划' if skipped else '', now if skipped else None,
+                            plan['timezone']))
                 db.execute('UPDATE schedules SET next_run_at=? WHERE id=?',
                            (slot(plan['schedule'], now, plan['timezone']), plan['id']))
                 count += 1

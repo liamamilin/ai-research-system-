@@ -281,3 +281,89 @@ describe("managed plan status honesty", () => {
     expect(screen.getByText(/最近一次执行成功/)).toBeTruthy();
   });
 });
+
+describe("write failures stay visible", () => {
+  const MANAGED = {
+    id: "research/夜间巡检", backend: "managed", title: "夜间巡检", enabled: true,
+    schedule: "0 3 * * *", schedule_label: "0 3 * * *", timezone: "Asia/Shanghai",
+  };
+
+  function errorResponse(status: number, code: string, message: string): Response {
+    return {
+      ok: false, status, statusText: "error",
+      text: async () => JSON.stringify({ error: { code, message, details: {} } }),
+    } as Response;
+  }
+
+  const PICKABLE = {
+    jobs: [{ name: "research/夜间巡检", label: "夜间巡检", description: "可被调度的任务",
+             enabled: true, schedule_type: "manual", command: "cd /proj && python run.py x" }],
+    total: 1,
+  };
+
+  function mockWithFailure(fail: (url: string, init?: RequestInit) => Response | null) {
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      const forced = fail(path, init);
+      if (forced) return forced;
+      if (path.includes("/preview")) return jsonResponse({ schedule: "0 8 * * *", timezone: "Asia/Shanghai", next_runs: ["2026-09-26T08:00:00+08:00"] });
+      if (path.includes("/api/scheduler/jobs")) return jsonResponse(PICKABLE);
+      if (path.includes("/api/scheduler")) {
+        return jsonResponse({
+          jobs: [MANAGED], total: 1,
+          dispatcher: { online: true, detail: "执行器在线", age_seconds: 3 },
+          health: { jobs: [{ id: MANAGED.id, status: "unverified", schedule: "0 3 * * *", detail: "尚未执行过" }], overdue: 0, paused: 0, detail: "" },
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fn);
+  }
+
+  it("reports a rejected create instead of closing the form", async () => {
+    mockWithFailure((url, init) =>
+      init?.method === "POST" && url.includes("/api/scheduler")
+        ? errorResponse(409, "schedule_conflict", "这个 job 已有周期计划，请编辑现有计划")
+        : null);
+    render(<SchedulerPage />);
+    fireEvent.click(screen.getByText(/新建调度/));
+    // The card and the picker both carry the name; the picker button is the one
+    // inside the form dialog.
+    fireEvent.click((await screen.findAllByText("夜间巡检"))[0]);
+    const create = screen.getByRole("button", { name: /创建调度/ }) as HTMLButtonElement;
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+
+    expect((await screen.findByRole("alert")).textContent).toContain("这个 job 已有周期计划");
+    // The form must stay open so the user can fix it instead of losing the input.
+    expect(screen.getByRole("button", { name: /创建调度/ })).toBeTruthy();
+  });
+
+  it("reports a rejected delete", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    mockWithFailure((_url, init) =>
+      init?.method === "DELETE" ? errorResponse(500, "internal", "删除失败，请重试") : null);
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /删除 research\/夜间巡检/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("删除失败");
+  });
+
+  it("reports a rejected pause", async () => {
+    mockWithFailure((url, init) =>
+      init?.method === "PUT" && url.includes("/toggle")
+        ? errorResponse(503, "host_offline", "执行器离线") : null);
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /暂停 research\/夜间巡检/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("执行器离线");
+  });
+
+  it("keeps the plan on screen when pausing fails", async () => {
+    mockWithFailure((url, init) =>
+      init?.method === "PUT" && url.includes("/toggle")
+        ? errorResponse(409, "conflict", "计划正在执行中") : null);
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /暂停 research\/夜间巡检/ }));
+    expect((await screen.findByRole("alert")).textContent).toContain("计划正在执行中");
+    expect(screen.getByText("夜间巡检")).toBeTruthy();
+  });
+});
