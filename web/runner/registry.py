@@ -31,6 +31,9 @@ class RunningTask:
         self.engine = engine
         self.future: Optional[object] = None  # concurrent.futures.Future
         self.status: str = "running"  # running | success | failed | cancelled
+        # Extra {placeholder} values for this run's prompt. The pipeline sets it
+        # so a synthesis stage receives the upstream reports it depends on.
+        self.prompt_vars: dict = {}
 
     @property
     def is_running(self) -> bool:

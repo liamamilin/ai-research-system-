@@ -78,6 +78,60 @@ STAGE_DEPS: dict[str, tuple[str, ...]] = {
 _STAGE_FILE = {key: fname for key, fname, _ in STAGES}
 _STAGE_LABEL = {key: label for key, _, label in STAGES}
 
+# How much upstream text to hand a synthesis stage. The radars run to ~25k
+# characters each, so all six is ~150k -- the entire research context budget,
+# spent before the model does any work. Truncation is stated in the prompt
+# rather than silent.
+UPSTREAM_CHAR_BUDGET = 60000
+_UPSTREAM_MIN_CHARS = 2000
+
+
+def collect_upstream(key: str, round_dir: str) -> tuple[str, list[str]]:
+    """Gather the documents ``key`` depends on, as (text, notes).
+
+    STAGE_DEPS already declared these relationships, but they were only used
+    for ordering and retry invalidation: nothing ever passed the documents on.
+    The model was expected to notice the prompt said "read the radar documents",
+    guess the dated path, and spend its context budget rediscovering them --
+    which it did not always get right (one round read a June plan in September).
+    """
+    deps = STAGE_DEPS.get(key) or ()
+    if not deps:
+        return "", []
+
+    blocks: list[str] = []
+    notes: list[str] = []
+    # Split the budget evenly. First-come-first-served let P1-P5 eat it and
+    # dropped P6 entirely, so a synthesis stage silently lost a whole radar.
+    share = max(_UPSTREAM_MIN_CHARS, UPSTREAM_CHAR_BUDGET // max(1, len(deps)))
+    for dep in deps:
+        path = os.path.join(round_dir, _STAGE_FILE[dep])
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read().strip()
+        except OSError:
+            notes.append(f"- {_STAGE_LABEL.get(dep, dep)}：缺失（未生成或已失败），"
+                         "请在最终报告中说明这一项没有输入。")
+            continue
+        if len(text) < _UPSTREAM_MIN_CHARS:
+            # A stub is worse than nothing: it would read as a real finding.
+            notes.append(f"- {_STAGE_LABEL.get(dep, dep)}：内容过短"
+                         f"（{len(text)} 字符），已忽略。")
+            continue
+        if len(text) > share:
+            text = text[:share] + f"\n\n（本节已截断，原文 {len(text)} 字符）"
+        blocks.append(
+            f"### {_STAGE_LABEL.get(dep, dep)}（{_STAGE_FILE[dep]}）\n\n{text}"
+        )
+
+    if not blocks:
+        return "", notes
+    header = ("以下是本轮上游阶段已生成的全部文档。它们是本次任务的输入材料，"
+              "请直接基于它们工作，不要再去搜索同样的内容。\n")
+    if notes:
+        header += "\n输入完整性提示：\n" + "\n".join(notes) + "\n"
+    return "\n\n---\n\n".join([header] + blocks), notes
+
 _rounds: dict[str, dict] = {}
 _lock = threading.RLock()
 _persist_lock = threading.RLock()
@@ -522,12 +576,25 @@ def _run_round(state: dict, config_dir: str, jobs_dir: str, concurrency: int,
                     job_name = f"{PIPELINE_DIR}/{key}"
                     _set_stage(state, key, "queued")
 
+                    # Hand the synthesis stages the documents they depend on.
+                    round_dir = os.path.join(
+                        os.path.dirname(os.path.abspath(config_dir)),
+                        "output", PIPELINE_DIR, state["date"])
+                    upstream, notes = collect_upstream(key, round_dir)
+                    if notes:
+                        logger.info("Stage %s upstream: %s",
+                                    key, "; ".join(notes))
+                    if upstream:
+                        logger.info("Stage %s received %d chars of upstream material",
+                                    key, len(upstream))
+
                     engine_stub = ResearchEngine(
                         config_dir=config_dir, jobs_dir=jobs_dir,
                         workspace_dir=workspace_dir,
                         user=state.get("trigger") or "pipeline",
                     )
                     task = registry.start(job_name, "pipeline", engine_stub)
+                    task.prompt_vars = {"upstream_reports": upstream}
                     future = pool.submit(
                         _run_stage, state, key, task, config_dir, jobs_dir
                     )

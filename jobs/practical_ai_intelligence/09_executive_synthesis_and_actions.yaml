@@ -32,6 +32,11 @@ prompt: |
 
   Read the radar documents from this round and generate the final synthesis report.
 
+  流水线已把 P7 与 P8 的全文附在下方「本轮上游文档」一节里，直接基于它们做综合，
+  不要再用 read_file 去找这些文件。
+
+  {upstream_reports}
+
   Input documents (from this round):
   - 01_model_and_pricing_radar.md
   - 02_ai_coding_tools_radar.md

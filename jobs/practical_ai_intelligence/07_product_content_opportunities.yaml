@@ -44,7 +44,11 @@ prompt: |
   - Care about practical tools, actual costs, real workflows, avoiding mistakes
   - User has validated that AI coding tool recommendations generate conversions
 
-  Input: the radar documents from this round (P1-P6).
+  Input: the radar documents from this round (P1-P6). 流水线已把它们全文附在下方
+  「本轮上游文档」一节里，直接基于它们分析，不要再用 read_file 去找这些文件，
+  也不要把同样的内容重新搜一遍。
+
+  {upstream_reports}
 
   Output as Markdown:
 

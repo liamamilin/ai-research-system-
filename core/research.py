@@ -53,6 +53,58 @@ _SENSITIVE_DIRS = (
 )
 
 
+# Replies that mean the model did not do the task. Without this check any
+# non-empty string became "the report": an apology, a rate-limit notice, or a
+# leaked system prompt would be written to output/ and indexed as research.
+_REFUSAL_PREFIXES = (
+    "i'm sorry", "i am sorry", "sorry,", "i cannot", "i can't", "i can not",
+    "i'm unable", "i am unable", "unable to", "as an ai", "i apologize",
+    "抱歉", "对不起", "我无法", "我不能", "无法完成", "作为ai",
+)
+_REFUSAL_MARKERS = (
+    "rate limit", "rate_limit", "too many requests", "http 429",
+    "invalid api key", "unauthorized", "quota exceeded",
+    "context length", "maximum context", "prompt is too long",
+    "internal server error", "service unavailable",
+    "upstream connect error", "bad gateway", "gateway timeout",
+    "502", "503", "504", "traceback (most recent call last)",
+)
+# A report is expected to have at least one Markdown heading.
+_HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
+# Stops at whitespace, ASCII punctuation and CJK punctuation. Without the CJK
+# class a Chinese sentence yielded "https://x.com/a。参考" as one "URL", which
+# then never matched anything the provenance check had actually retrieved.
+_URL_RE = re.compile(
+    r"https?://[^\s<>()\[\]{}\"'`\\^|，。、；：？！…—～«»“”‘’　]+"
+)
+
+
+def report_problem(content: str, tools_used: int = 0,
+                   min_chars: int = 400) -> Optional[str]:
+    """Why ``content`` cannot be saved as a report, or None if it looks like one.
+
+    Deliberately conservative: it only rejects shapes that are unambiguously not
+    a research report, because a false positive costs a whole run.
+    """
+    text = (content or "").strip()
+    if not text:
+        return "内容为空"
+    lowered = text[:400].lower()
+    for prefix in _REFUSAL_PREFIXES:
+        if lowered.startswith(prefix):
+            return f"以拒绝/致歉语开头（{prefix!r}）"
+    for marker in _REFUSAL_MARKERS:
+        if marker in lowered:
+            return f"看起来是错误信息（含 {marker!r}）"
+    if tools_used == 0 and len(text) < min_chars:
+        return f"未做任何检索且仅 {len(text)} 字符（不足 {min_chars}）"
+    if len(text) < min_chars:
+        return f"仅 {len(text)} 字符，不足 {min_chars}"
+    if not _HEADING_RE.search(text) and not _URL_RE.search(text):
+        return "没有标题也没有任何引用链接"
+    return None
+
+
 def is_sensitive_path(path: str, workspace: str) -> bool:
     """Whether ``path`` holds credentials rather than research material.
 
@@ -668,9 +720,3 @@ def _tool_definitions() -> list[dict]:
             },
         },
     ]
-
-
-def report_problem(content: str, tools_used: int = 0,
-                   min_chars: int = 400) -> Optional[str]:
-    """Placeholder; the real check lands in the next commit."""
-    return None

@@ -35,7 +35,8 @@ class ResearchEngine:
                  cancel_token: Optional[threading.Event] = None,
                  progress_cb=None, workspace_dir: Optional[str] = None,
                  date_override: Optional[str] = None,
-                 user: Optional[str] = None):
+                 user: Optional[str] = None,
+                 prompt_vars: Optional[dict] = None):
         self.config_dir = config_dir
         self.jobs_dir = jobs_dir
         self.sys = load_system_config(config_dir)
@@ -44,6 +45,11 @@ class ResearchEngine:
         self.workspace_dir = os.path.abspath(workspace_dir or os.getcwd())
         self._date_override = date_override
         self.user = user or ""
+        # Extra {placeholder} values supplied by the caller. The synthesis
+        # stages use this to receive the upstream reports they are meant to
+        # read, instead of hoping the model guesses the right path and spends
+        # its whole context budget rediscovering them through read_file.
+        self.prompt_vars = dict(prompt_vars or {})
 
     def _now(self) -> datetime:
         """Current time, with the date replaced by date_override when set.
@@ -344,7 +350,10 @@ class ResearchEngine:
             "recent_outcomes": self._outcomes_block(),
             "reported_events": self._reported_events(),
         }
-        pass
+        # Caller-supplied values win, so a pipeline can override e.g. {date}.
+        # getattr because a few callers build the engine via __new__ to exercise
+        # a single method, and a missing attribute should not crash a prompt build.
+        variables.update(getattr(self, "prompt_vars", None) or {})
 
         # Simple {var} substitution
         result = template
