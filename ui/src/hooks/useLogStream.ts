@@ -26,6 +26,11 @@ const MAX_CONSECUTIVE_ERRORS = 3;
 export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
   const [events, setEvents] = useState<LogEvent[]>([]);
   const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
+  // Whether the server has told us a run is in flight. Deliberately not derived
+  // from streamStatus: a stream that is merely connecting says nothing about
+  // the job, and opening the log tab of an idle job used to make the page
+  // claim "运行中" and hide the previous run's log.
+  const [runActive, setRunActive] = useState(false);
   const [nonce, setNonce] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const errorCountRef = useRef(0);
@@ -40,6 +45,7 @@ export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
   const clear = useCallback(() => {
     setEvents([]);
     setStreamStatus("connecting");
+    setRunActive(false);
     errorCountRef.current = 0;
     // Force a fresh subscription: the previous EventSource may have already
     // terminated (idle/finished/error), and a run started right after would
@@ -77,9 +83,14 @@ export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
           // "idle" means the job exists but nothing is running in this
           // process; treat it as a terminal state so the UI stops waiting.
           setStreamStatus("finished");
+          setRunActive(false);
           es.close();
         } else if (data.type === "error") {
           setStreamStatus("error");
+          setRunActive(false);
+        } else {
+          // log / progress: the server is streaming a run, so one is in flight.
+          setRunActive(true);
         }
       } catch {
         // skip malformed events
@@ -102,7 +113,7 @@ export function useLogStream({ jobName, enabled = true }: UseLogStreamOptions) {
     };
   }, [jobName, enabled, addEvent, nonce]);
 
-  const isRunning = enabled && (streamStatus === "connecting" || streamStatus === "connected");
+  const isRunning = enabled && runActive;
 
   return {
     events,

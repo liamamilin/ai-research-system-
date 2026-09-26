@@ -136,4 +136,23 @@ describe("useLogStream", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(FakeEventSource.instances).toHaveLength(0);
   });
+
+  it("does not report a run while merely connected but silent", async () => {
+    // A stream that is open says nothing about the job. Reporting "running"
+    // from the connection state made opening the log tab of an idle job flip
+    // the page to 运行中 and hide the previous run's log.
+    const { result } = renderHook(() => useLogStream({ jobName: "g" }));
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+
+    act(() => {
+      FakeEventSource.latest().onopen?.();
+    });
+    expect(result.current.streamStatus).toBe("connected");
+    expect(result.current.isRunning).toBe(false);
+
+    act(() => {
+      FakeEventSource.latest().emit({ type: "log", level: "info", message: "started" });
+    });
+    expect(result.current.isRunning).toBe(true);
+  });
 });

@@ -30,7 +30,6 @@ export function JobDetailPage() {
   // Run state
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState("");
-  const [showLogs, setShowLogs] = useState(false);
 
   // Persisted run logs (survive refresh / server restart)
   const [pastLogs, setPastLogs] = useState<PersistedLogRecord[]>([]);
@@ -59,11 +58,16 @@ export function JobDetailPage() {
   const hasChanges = editYaml !== originalYaml;
   const toast = useToast();
 
-  // SSE log stream (enabled when we have a running task and are on logs tab, or after trigger)
+  // SSE log stream. The tab is the only thing that gates it: a second flag
+  // used to decide this independently, and the two disagreed. The panel
+  // renders on `tab === "logs"` while the hook was gated on that other flag,
+  // so the page could show "等待日志..." with no stream behind it, and the
+  // 重新连接 button could not recover because it re-subscribes without
+  // re-enabling. One source of truth, so they cannot drift apart again.
   const decodedName = name ? decodeURIComponent(name) : "";
   const { events: logEvents, streamStatus, isRunning: sseRunning, clear: clearLogs, reconnect: reconnectLogs, latestStatus } = useLogStream({
     jobName: decodedName,
-    enabled: showLogs,
+    enabled: tab === "logs",
   });
 
   const fetchJob = useCallback(async () => {
@@ -114,11 +118,13 @@ export function JobDetailPage() {
       .finally(() => setHistoryLoading(false));
   }, [tab, decodedNameForHistory]);
 
-  // When SSE finishes, refetch job to get updated state/output
+  // When SSE finishes, refetch job to get updated state/output.
+  // No need to stop the stream here: the hook already closed the EventSource
+  // on a terminal status, and gating on the tab means the user can stay on the
+  // log page and read the finished run.
   useEffect(() => {
     if (latestStatus && !sseRunning) {
       fetchJob();
-      setShowLogs(false);
     }
   }, [latestStatus, sseRunning, fetchJob]);
 
@@ -135,7 +141,6 @@ export function JobDetailPage() {
     if (!name || runBusy) return;
     setRunBusy(true);
     setRunError("");
-    setShowLogs(true);
     setTab("logs");
     clearLogs();
     try {
@@ -150,7 +155,10 @@ export function JobDetailPage() {
       } else {
         setRunError(err instanceof Error ? err.message : "启动失败");
       }
-      setShowLogs(false);
+      // The run never started, so there is no log stream to read. Leaving the
+      // user on the log page would only show "等待日志..." for a run that does
+      // not exist.
+      setTab("overview");
     } finally {
       setRunBusy(false);
     }
@@ -689,8 +697,11 @@ function LogViewer({
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (autoScroll) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Guarded like Reports.tsx: jsdom has no scrollIntoView, and an unguarded
+    // call here throws inside a passive effect rather than failing a test.
+    const el = bottomRef.current;
+    if (autoScroll && el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ behavior: "smooth" });
     }
   }, [events, autoScroll]);
 
