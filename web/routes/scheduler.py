@@ -13,6 +13,7 @@ from core import cron
 from web import audit
 from web.deps import require_admin
 from web.models import ApiError
+from web.services import launchd_agents
 from web.services import scheduler, managed_scheduler as managed
 from core.schedule_store import ScheduleConflict
 from core import schedule_host
@@ -55,9 +56,16 @@ def _mutate(operation, *args):
         raise _error(503, "scheduler_error", str(exc)) from exc
 
 
-def _editable(job_id: str) -> None:
-    if job_id in scheduler.LAUNCHD_LABELS:
-        raise _error(409, "system_managed", "此任务由系统 launchd 管理，请通过安装脚本修改")
+def _is_system_job(job_id: str) -> bool:
+    """The two pipeline agents, which this page can now edit like any plan."""
+    return job_id in launchd_agents.KINDS
+
+
+def _require_installed(job_id: str) -> None:
+    """Refuse to edit an agent that is not on disk, and say how to get it back."""
+    if not launchd_agents.read_config(job_id):
+        raise _error(409, "not_installed",
+                     f"系统任务未安装：{job_id}，请运行 bash scripts/install_launchd.sh")
 
 
 @router.get("")
@@ -84,8 +92,10 @@ def list_scheduled(user=Depends(require_admin)):
     health['overdue'] = sum(s['status'] == 'overdue' for s in health['jobs'])
     health['paused'] = sum(s['status'] == 'paused' for s in health['jobs'])
     health['status'] = 'error' if health['overdue'] else 'warn' if warnings else 'ok'
+    removed = launchd_agents.list_deleted(get_settings().paths.state_dir)
     return {"jobs": displayed, "total": len(displayed), "health": health,
-            "timezone": cron.timezone_label(), "warnings": warnings, 'dispatcher': host}
+            "timezone": cron.timezone_label(), "warnings": warnings,
+            'dispatcher': host, "removed_system_jobs": removed}
 
 
 @router.get("/preview")
@@ -132,7 +142,6 @@ def list_schedulable_jobs(user=Depends(require_admin)):
 def add_scheduled(payload: ScheduleCreate, user=Depends(require_admin)):
     """Every new job plan goes to the durable dispatcher, never to cron."""
     job_id = payload.id.strip()
-    _editable(job_id)
     if not payload.job_name.strip():
         raise _error(422, 'missing_job', '请选择要周期运行的研究任务')
     created = _mutate(lambda: managed.save(
@@ -145,7 +154,13 @@ def add_scheduled(payload: ScheduleCreate, user=Depends(require_admin)):
 @router.put("/{job_id}")
 def edit_scheduled(job_id: str, payload: ScheduleEdit, user=Depends(require_admin)):
     """Update a schedule without resetting its paused state."""
-    _editable(job_id)
+    if _is_system_job(job_id):
+        _require_installed(job_id)
+        config = _mutate(launchd_agents.apply_cron, job_id, payload.schedule)
+        audit.log("schedule_edit", user=user["username"], target=job_id,
+                  details={"backend": "launchd"})
+        return {"ok": True, "backend": "launchd",
+                "schedule": launchd_agents.to_cron(job_id, config)}
     plan = managed.store().get(job_id)
     if plan:
         updated = _mutate(lambda: managed.save(
@@ -161,8 +176,18 @@ def edit_scheduled(job_id: str, payload: ScheduleEdit, user=Depends(require_admi
 
 @router.delete("/{job_id}")
 def remove_scheduled(job_id: str, user=Depends(require_admin)):
-    """Remove one cron schedule, preserving all unrelated entries."""
-    _editable(job_id)
+    """Remove one schedule, preserving all unrelated entries.
+
+    System agents are moved into ``state/scheduler_backup/`` rather than
+    unlinked, so ``POST /{job_id}/restore`` can bring them back.
+    """
+    if _is_system_job(job_id):
+        _require_installed(job_id)
+        state_dir = get_settings().paths.state_dir
+        result = _mutate(launchd_agents.delete, job_id, state_dir)
+        audit.log("schedule_remove", user=user["username"], target=job_id,
+                  details={"backend": "launchd", "backup": result["backup"]})
+        return {"ok": True, "backend": "launchd", "restorable": True, **result}
     operation = managed.store().delete if managed.store().get(job_id) else scheduler.remove_job
     if not _mutate(operation, job_id):
         raise _error(404, "not_found", f"未找到调度：{job_id}")
@@ -170,10 +195,30 @@ def remove_scheduled(job_id: str, user=Depends(require_admin)):
     return {"ok": True}
 
 
+@router.post("/{job_id}/restore")
+def restore_scheduled(job_id: str, user=Depends(require_admin)):
+    """Put a deleted system agent back and load it again."""
+    if not _is_system_job(job_id):
+        raise _error(400, "not_restorable", "只有情报矩阵系统任务支持恢复")
+    state_dir = get_settings().paths.state_dir
+    result = _mutate(launchd_agents.restore, job_id, state_dir)
+    audit.log("schedule_restore", user=user["username"], target=job_id,
+              details={"backend": "launchd"})
+    return {"ok": True, **result}
+
+
 @router.put("/{job_id}/toggle")
 def toggle_scheduled(job_id: str, payload: ScheduleToggle, user=Depends(require_admin)):
     """Set enabled state idempotently."""
-    _editable(job_id)
+    if _is_system_job(job_id):
+        _require_installed(job_id)
+        # Pausing unloads the agent but leaves the plist, so the configured
+        # trigger survives and enabling cannot silently lose it.
+        _mutate(launchd_agents.set_enabled, job_id, payload.enabled)
+        audit.log("schedule_toggle", user=user["username"], target=job_id,
+                  details={"backend": "launchd"},
+                  result="enabled" if payload.enabled else "disabled")
+        return {"ok": True, "enabled": payload.enabled}
     plan = managed.store().get(job_id)
     if plan and payload.enabled:
         _mutate(managed.ensure_online)

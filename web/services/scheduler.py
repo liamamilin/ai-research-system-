@@ -19,6 +19,10 @@ from typing import Optional
 
 from core import cron
 from core.fileio import file_lock
+from web.services import launchd_agents
+from web.services.launchd_agents import KINDS as _LAUNCHD_KINDS
+from web.services.launchd_agents import LABELS as _LAUNCHD_LABELS
+from web.services.launchd_agents import to_cron as _launchd_to_cron
 
 
 class ScheduleConflict(ValueError):
@@ -539,20 +543,26 @@ def classify_jobs(jobs: list[dict], state_dir: str = "state",
     return results
 
 
-LAUNCHD_LABELS = ("com.arec.pipeline.daily", "com.arec.pipeline.catchup")
+LAUNCHD_LABELS = _LAUNCHD_LABELS
 
 
-def list_launchd_agents() -> list[dict]:
+def list_launchd_agents(directory: str | None = None) -> list[dict]:
     """The launchd agents that trigger the pipeline.
 
     launchd replaced cron here: it dispatches reliably on this machine, runs
     jobs missed while the machine slept, and can be inspected. Reading the
     agents means the schedule page and the watchdog see the real triggers
     instead of an empty crontab.
+
+    ``directory`` defaults to this user's real LaunchAgents folder; tests point
+    ``launchd_agents.agent_dir`` at an empty temp dir so the suite never reads
+    (or edits) the machine's own agents.
     """
     agents: list[dict] = []
     for label in LAUNCHD_LABELS:
-        path = os.path.expanduser(f"~/Library/LaunchAgents/{label}.plist")
+        # Read through launchd_agents so there is one definition of where an
+        # agent lives, and so a test can redirect it in a single place.
+        path = str(launchd_agents.plist_path(label, directory))
         config = {}
         try:
             with open(path, "rb") as fh:
@@ -562,19 +572,26 @@ def list_launchd_agents() -> list[dict]:
         if not isinstance(config, dict):
             config = {}
         info: dict = {"id": label, "backend": "launchd", "label": label,
-                      "installed": bool(config)}
+                      "installed": bool(config), "kind": _LAUNCHD_KINDS.get(label, "")}
         try:
             result = subprocess.run(
                 ["/bin/launchctl", "print", f"gui/{os.getuid()}/{label}"],
                 capture_output=True, text=True, timeout=10)
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError) as exc:
+            # Dropping the agent here made the task vanish from the page with no
+            # error at all -- the one outcome an operator cannot act on.
+            info.update({"loaded": False, "enabled": False, "state": "unknown",
+                         "command": "ensure_round.py", "schedule": _launchd_to_cron(label, config),
+                         "discovery_warning": f"launchctl 读取失败：{exc}"})
+            agents.append(info)
             continue
         if result.returncode != 0:
             if not config:
                 continue
             calendar = config.get("StartCalendarInterval", {})
             info.update({"loaded": False, "enabled": False, "minute": "", "hour": "",
-                         "command": "ensure_round.py", "interval_seconds": config.get("StartInterval", 0)})
+                         "command": "ensure_round.py", "interval_seconds": config.get("StartInterval", 0),
+                         "schedule": _launchd_to_cron(label, config)})
             if isinstance(calendar, dict):
                 info.update(hour=str(calendar.get("Hour", "")), minute=str(calendar.get("Minute", "")))
             agents.append(info)
@@ -621,6 +638,7 @@ def list_launchd_agents() -> list[dict]:
             "hour": hour,
             "run_at_load": "RunAtLoad" in text,
             "interval_seconds": interval or config.get("StartInterval", 0),
+            "schedule": _launchd_to_cron(label, config),
             "command": (" ".join(config.get("ProgramArguments", [])) or ("run_practical_intelligence.sh"
                         if label.endswith("daily") else "ensure_round.py")),
         })
@@ -637,7 +655,11 @@ def all_jobs() -> list[dict]:
         error = exc
         jobs = []
     for agent in list_launchd_agents():
-        jobs.append({**agent, "schedule_type": "launchd", "editable": False})
+        # The pipeline agents are ordinary plists that this page can now edit,
+        # pause and restore, so they are no longer flagged read-only. An agent
+        # whose plist is missing stays read-only: there is nothing to edit.
+        jobs.append({**agent, "schedule_type": "launchd",
+                     "editable": bool(agent.get("installed"))})
     if error and not jobs:
         raise error
     if error:

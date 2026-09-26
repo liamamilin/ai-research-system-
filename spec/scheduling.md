@@ -40,7 +40,22 @@ python scripts/install_scheduler.py
 
 macOS 需要电脑开机且用户会话可用；关机或休眠期间不能准点执行，恢复后才补跑。严格要求全天准点的执行端应部署在常开服务器。其他平台可用 systemd/容器服务托管 `scripts/dispatch_schedules.py`（工作目录为项目，使用同一 Python、配置和持久化 state 目录）；本次仅自动安装 macOS launchd。执行器离线时，创建/恢复计划会报错，不能把“保存了时间”当作调度已经可用。
 
-已有 cron 保留编辑兼容，情报矩阵的每日和半小时补偿仍通过 `ensure_round.py` 运行，在页面只读显示。新计划不再写入 cron，不自动迁移旧触发器。将同一 job 从旧 cron 改为托管计划时，应先暂停旧计划；自定义 shell 和外部触发器无法全部自动识别。
+已有 cron 保留编辑兼容。新计划不再写入 cron，不自动迁移旧触发器。将同一 job 从旧 cron 改为托管计划时，应先暂停旧计划；自定义 shell 和外部触发器无法全部自动识别。
+
+## 情报矩阵系统任务
+
+情报矩阵的每日运行（`com.arec.pipeline.daily`）与半小时补偿（`com.arec.pipeline.catchup`）由 `scripts/install_launchd.sh` 安装为 LaunchAgent，同样可以在页面上管理：
+
+| 操作 | 行为 |
+|------|------|
+| 编辑 | 改写已安装 plist 的触发时间并重新加载。每日任务只接受 `分 时 * * *`；补偿任务只接受 `*/分钟 * * * *`（1–360 分钟） |
+| 暂停 | `bootout` 卸载，**保留 plist**，因此恢复不会丢失已配置的频率 |
+| 删除 | 卸载并把 plist 移到 `state/scheduler_backup/<时间戳>/`，页面提供「已删除的系统任务」与一键恢复 |
+| 恢复 | 移回 plist、校验后重新加载，并按删除前的频率继续 |
+
+写入前用 `plutil -lint` 校验，重新加载失败会**回滚到原 plist**并重新加载旧配置——不能让一次编辑导致轮次不再被触发。删除只停用自动触发，已有报告与研究任务不受影响。
+
+`scripts/install_launchd.sh` 会用 `scripts/launchd/*.plist` 模板重新渲染并覆盖 plist，因此**页面上的修改在重跑安装脚本后会被还原**。删掉某个系统任务后若重跑安装脚本，它会被重新装回。
 
 ## 验证
 

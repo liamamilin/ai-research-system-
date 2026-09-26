@@ -91,8 +91,14 @@ def web_env(tmp_path, monkeypatch, _password_hashes):
     from web.services import scheduler as scheduler_service
 
     # launchctl would otherwise report this machine's real agents, so a test
-    # would depend on whether the pipeline is currently installed.
-    monkeypatch.setattr(scheduler_service, "list_launchd_agents", lambda: [])
+    # would depend on whether the pipeline is currently installed. Point the
+    # agent directory at an empty temp dir rather than stubbing the reader: the
+    # real function then runs everywhere, and a test that needs agents installs
+    # them into its own directory.
+    from web.services import launchd_agents
+    empty_agents = tmp_path / "no-launchd-agents"
+    empty_agents.mkdir(exist_ok=True)
+    monkeypatch.setattr(launchd_agents, "agent_dir", lambda: empty_agents)
 
     monkeypatch.setattr(
         scheduler_service, "_get_crontab",

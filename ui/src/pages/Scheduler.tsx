@@ -3,7 +3,7 @@ import { api } from "@/api/client";
 import { cn } from "@/lib/utils";
 import { ErrorState } from "@/components/ErrorState";
 import { errorMessage, useToast } from "@/lib/toast";
-import { AlertTriangle, Clock, Trash2, Play, Pause, HelpCircle, Pencil, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Clock, Trash2, Play, Pause, HelpCircle, Pencil, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import { ScheduleRuns } from "@/components/ScheduleRuns";
 import { CronBuilder, scheduleSummary } from "@/components/CronBuilder";
 
@@ -23,9 +23,14 @@ interface ScheduledJob {
   max_retries?: number;
   editable?: boolean;
   title?: string;
+  schedule?: string;
   schedule_label?: string;
   next_runs?: string[];
+  kind?: string;
+  installed?: boolean;
+  loaded?: boolean;
 }
+interface RemovedSystemJob { label: string; kind: string; deleted_at: string; schedule: string }
 interface Dispatcher { online: boolean; detail: string; age_seconds?: number }
 interface SchedulableJob {
   schedule_id?: string;
@@ -45,7 +50,17 @@ interface JobScheduleState {
 interface Preview { schedule: string; timezone: string; next_runs: string[]; requestedTimezone?: string }
 const EMPTY = { id: "", job_name: "", schedule: "0 8 * * *", command: "", timezone: "local", missed_policy: "latest", max_retries: 2 };
 const STATUS = { ok: "有运行证据", paused: "已暂停", overdue: "需要检查", unverified: "待验证", no_schedule: "时间待检查", running: "运行中", queued: "等待执行", retry: "等待重试" };
-const expression = (job: ScheduledJob) => [job.minute, job.hour, job.day_of_month, job.month, job.day_of_week].join(" ");
+// A launchd agent carries no dom/month/dow, so fall back to the cron expression
+// the backend projected from its plist; otherwise the editor would open on
+// "0 6 undefined undefined undefined".
+const expression = (job: ScheduledJob) => job.schedule
+  || [job.minute, job.hour, job.day_of_month, job.month, job.day_of_week].join(" ");
+// The two matrix agents only speak two shapes. Saying so beats a generic
+// cron error after the operator has already typed a whole schedule.
+const SYSTEM_HINT: Record<string, string> = {
+  daily: "每日任务：每天固定时间一次，格式「分 时 * * *」（例：0 6 * * * = 每天 06:00）",
+  interval: "补跑任务：固定间隔检查一次，格式「*/分钟 * * * *」（例：*/30 = 每 30 分钟）",
+};
 // Preserve server wall time; the browser may be in a different timezone.
 const displayTime = (iso?: string) => iso ? iso.slice(0, 16).replace("T", " ") : "—";
 
@@ -73,17 +88,19 @@ export function SchedulerPage() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [removed, setRemoved] = useState<RemovedSystemJob[]>([]);
 
   const fetchJobs = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     setError("");
     try {
-      const data = await api<{ jobs: ScheduledJob[]; health?: { jobs: JobScheduleState[] }; timezone?: string; warnings?: string[]; dispatcher?: Dispatcher }>("/api/scheduler");
+      const data = await api<{ jobs: ScheduledJob[]; health?: { jobs: JobScheduleState[] }; timezone?: string; warnings?: string[]; dispatcher?: Dispatcher; removed_system_jobs?: RemovedSystemJob[] }>("/api/scheduler");
       setJobs(data.jobs);
       setDispatcher(data.dispatcher || null);
       setStates(Object.fromEntries((data.health?.jobs || []).map(entry => [entry.id, entry])));
       setTimezone(data.timezone || "服务器本地时区");
       setWarnings(data.warnings || []);
+      setRemoved(data.removed_system_jobs || []);
     } catch (err) { setError(errorMessage(err, "加载失败")); }
     finally { setLoading(false); }
   }, []);
@@ -143,8 +160,11 @@ export function SchedulerPage() {
     if (busy) return;
     setBusy("save"); setMsg("");
     try {
+      // A system agent is a plist, not a plan: it has no job to pick and no
+      // command, so send only the trigger it understands.
+      const body = isSystemEdit ? { schedule: form.schedule } : form;
       await api(editing ? `/api/scheduler/${encodeURIComponent(editing)}` : "/api/scheduler", {
-        method: editing ? "PUT" : "POST", body: form,
+        method: editing ? "PUT" : "POST", body,
       });
       toast.success(editing ? "调度已更新" : "调度已创建");
       setShowForm(false); setEditing(null); setForm({ ...EMPTY });
@@ -154,15 +174,33 @@ export function SchedulerPage() {
   };
   const mutate = async (job: ScheduledJob, remove: boolean) => {
     if (busy) return;
-    if (remove && !window.confirm(`删除调度「${job.id}」？研究任务和已有报告会保留。`)) return;
+    if (remove) {
+      const warning = job.backend === "launchd"
+        ? `删除系统任务「${job.title || job.id}」？\n\n情报矩阵将不再自动运行，已有报告会保留。\n删除后可在下方「已删除的系统任务」中一键恢复。`
+        : `删除调度「${job.id}」？研究任务和已有报告会保留。`;
+      if (!window.confirm(warning)) return;
+    }
     setBusy(job.id); setMsg("");
     try {
       await api(`/api/scheduler/${encodeURIComponent(job.id)}${remove ? "" : "/toggle"}`, {
         method: remove ? "DELETE" : "PUT", ...(remove ? {} : { body: { enabled: !job.enabled } }),
       });
-      toast.success(remove ? "调度已删除" : job.enabled ? "调度已暂停" : "调度已启用");
+      toast.success(remove
+        ? (job.backend === "launchd" ? "系统任务已删除，可恢复" : "调度已删除")
+        : job.enabled ? "调度已暂停" : "调度已启用");
       await fetchJobs();
     } catch (err) { setMsg(errorMessage(err)); }
+    finally { setBusy(""); }
+  };
+  const restore = async (job: RemovedSystemJob) => {
+    if (busy) return;
+    if (!window.confirm(`恢复系统任务「${job.label}」？将重新加载并按原频率（${job.schedule}）运行。`)) return;
+    setBusy(job.label); setMsg("");
+    try {
+      await api(`/api/scheduler/${encodeURIComponent(job.label)}/restore`, { method: "POST" });
+      toast.success("系统任务已恢复");
+      await fetchJobs();
+    } catch (err) { setMsg(errorMessage(err, "恢复失败")); }
     finally { setBusy(""); }
   };
   const startDispatcher = async () => {
@@ -171,11 +209,18 @@ export function SchedulerPage() {
     catch (err) { setMsg(errorMessage(err)); }
     finally { setBusy(""); }
   };
-  const legacyEdit = !!editing && jobs.find(j => j.id === editing)?.backend !== "managed";
+  const editingJob = editing ? jobs.find(j => j.id === editing) : undefined;
+  const isSystemEdit = editingJob?.backend === "launchd";
+  // Only a legacy cron entry owns its own command line; managed plans and
+  // system agents get their trigger from somewhere else.
+  const legacyEdit = !!editing && !isSystemEdit && editingJob?.backend !== "managed";
   const filteredJobs = schedulable.filter(job => `${job.name} ${job.label} ${job.description}`.toLowerCase().includes(jobQuery.trim().toLowerCase()));
   const hasLaunchd = jobs.some(job => job.backend === "launchd");
   const needsAttention = Object.values(states).filter(s => ["overdue", "unverified", "no_schedule"].includes(s.status)).length;
   const previewValid = preview?.schedule === form.schedule.trim().split(/\s+/).join(" ") && preview.requestedTimezone === form.timezone && !!preview?.next_runs?.length;
+  // A system agent carries no job and no command -- only the trigger -- so
+  // requiring either of those would leave its save button permanently disabled.
+  const canSave = isSystemEdit ? !!form.schedule.trim() : (legacyEdit ? !!form.command.trim() : !!form.job_name);
 
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center gap-2">
@@ -200,20 +245,26 @@ export function SchedulerPage() {
     {hasLaunchd && <div className="card border-accent/30 p-4 flex gap-3">
       <ShieldCheck className="w-5 h-5 text-accent shrink-0" /><div className="text-sm space-y-1">
         <p className="font-medium">情报矩阵由系统定时运行，并定期检查漏跑</p>
-        <p className="text-xs text-text-muted">关闭页面不影响调度。补偿任务检查当天轮次；运行结果可在<a className="text-accent mx-1" href="/rounds">轮次看板</a>查看。系统任务在下方单独标识。</p>
+        <p className="text-xs text-text-muted">关闭页面不影响调度。补偿任务检查当天轮次；运行结果可在<a className="text-accent mx-1" href="/rounds">轮次看板</a>查看。下方两个系统任务可直接改时间、暂停或删除。</p>
       </div>
     </div>}
     {showHelp && <div className="card p-4 text-sm space-y-2">
       <p>选择研究任务和执行时间即可创建计划；默认每天 08:00。时间按服务器所在机器的时区计算。</p>
       <p className="text-text-muted">新计划由系统托管执行器统一处理。休眠、服务中断后默认合并补跑最新一次；同一 job 不重叠执行。电脑仍需开机并登录，关机期间不能运行。</p>
       <p className="text-text-muted">失败采用有限重试，默认最多 2 次（1 分钟、5 分钟后）；预算耗尽、job 停用或不存在会明确记录原因。暂停只影响后续执行，不取消正在运行的任务。</p>
-      <p className="text-text-muted">托管计划以实际报告生成结果判定成功，执行和重试记录可在卡片中查看。旧 cron 和情报矩阵专用系统任务单独标识。</p>
+      <p className="text-text-muted">托管计划以实际报告生成结果判定成功，执行和重试记录可在卡片中查看。</p>
+      <p className="text-text-muted">情报矩阵的每日运行与漏跑补偿是系统任务，可直接在本页改时间、暂停、删除与恢复；修改的是已安装的 launchd 配置，重新运行安装脚本会覆盖它。</p>
     </div>}
     {warnings.map(w => <div key={w} role="alert" className="card border-warning/50 p-3 text-sm text-warning">{w}</div>)}
     {msg && <div role="alert" className="card border-danger/50 p-3 text-sm text-danger">{msg}</div>}
 
     {showForm && <div className="card p-5 space-y-5">
       <div><h2 className="font-medium">{editing ? `编辑计划 · ${editing}` : "新建研究计划"}</h2><p className="text-xs text-text-muted mt-1">{editing ? "修改后保留当前启用或暂停状态。" : "选择任务 → 设置频率 → 确认下次运行。保存时会验证执行器在线。"}</p></div>
+      {isSystemEdit && <div className="card border-accent/30 p-3 text-xs space-y-1">
+        <p className="font-medium">这是情报矩阵的系统任务，直接修改已安装的 launchd 配置。</p>
+        <p className="text-text-muted">{SYSTEM_HINT[editingJob?.kind || ""] || "该任务只支持固定触发时间。"}</p>
+        <p className="text-warning">重新运行 <code>bash scripts/install_launchd.sh</code> 会用模板覆盖这里的修改。</p>
+      </div>}
       {!editing && <div className="space-y-2">
         <label htmlFor="job-query" className="text-xs text-text-muted">研究任务</label>
         <input id="job-query" className="input" placeholder="搜索 job 名称或描述…（如 radar、daily、practical）" value={jobQuery} onChange={e => setJobQuery(e.target.value)} />
@@ -228,7 +279,7 @@ export function SchedulerPage() {
         </div>}
       </div>}
       <div className="space-y-2"><h3 className="text-xs text-text-muted">重复频率</h3><CronBuilder key={editing || "new"} value={form.schedule} onChange={schedule => setForm(prev => ({ ...prev, schedule }))} /></div>
-      {!legacyEdit && <div className="grid sm:grid-cols-3 gap-3 text-xs text-text-muted">
+      {!legacyEdit && !isSystemEdit && <div className="grid sm:grid-cols-3 gap-3 text-xs text-text-muted">
         <label>执行时区<select aria-label="执行时区" className="input mt-1" value={form.timezone} onChange={e => setForm({ ...form, timezone: e.target.value })}>
           {['local', 'Asia/Shanghai', 'UTC', 'America/New_York', 'Europe/London'].map(tz => <option key={tz} value={tz}>{tz === 'local' ? '跟随本机时区' : tz}</option>)}
           {!['local', 'Asia/Shanghai', 'UTC', 'America/New_York', 'Europe/London'].includes(form.timezone) && <option value={form.timezone}>{form.timezone}</option>}
@@ -246,26 +297,28 @@ export function SchedulerPage() {
         {legacyEdit && <label className="block">执行命令<textarea className="input mt-1 font-mono" rows={3} placeholder="如: cd /path && python run.py daily_ai_agents" value={form.command} onChange={e => setForm({ ...form, command: e.target.value })} /></label>}
         <p>执行器直接调用选中的 job，无需填写 Shell 命令。API 密钥由项目 .env 加载。</p>
       </div></details>
-      <div className="flex justify-end gap-2"><button className="btn" disabled={!!busy} onClick={() => setShowForm(false)}>取消</button><button className="btn btn-primary" onClick={save} disabled={!!busy || !(legacyEdit ? form.command.trim() : form.job_name) || !previewValid || previewLoading}>{busy === "save" ? "保存中…" : editing ? "保存修改" : "创建调度"}</button></div>
+      <div className="flex justify-end gap-2"><button className="btn" disabled={!!busy} onClick={() => setShowForm(false)}>取消</button><button className="btn btn-primary" onClick={save} disabled={!!busy || !canSave || !previewValid || previewLoading}>{busy === "save" ? "保存中…" : editing ? "保存修改" : "创建调度"}</button></div>
     </div>}
 
     {loading ? <p className="text-sm text-text-muted">加载中…</p> : error ? <ErrorState error={error} onRetry={() => fetchJobs()} /> : jobs.length === 0 ? <div className="card p-10 text-center space-y-2">
       <Clock className="w-8 h-8 mx-auto text-text-muted" /><p className="text-sm font-medium">暂无周期调度任务</p><p className="text-xs text-text-muted">创建计划后，可在这里查看下一次运行和执行状态。</p><button className="btn mt-2" onClick={openNew}>创建第一个计划</button>
     </div> : <div className="space-y-3">{jobs.map(job => {
       const state = states[job.id];
-      const editable = job.editable !== false && job.backend !== "launchd";
+      const isSystem = job.backend === "launchd";
+      const editable = job.editable !== false;
       return <div key={job.id} className={cn("card p-4 space-y-3", state?.status === "overdue" && "border-danger/50")}>
         <div className="flex flex-wrap items-start gap-3"><div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium break-all">{job.title || job.id}</h2><span className="text-[10px] border border-border rounded px-1.5 py-0.5 text-text-muted">{job.backend === "managed" ? "托管计划 · 自动补跑" : job.backend === "launchd" ? "情报矩阵 · 系统任务" : "旧 cron"}</span>
+          <div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium break-all">{job.title || job.id}</h2><span className="text-[10px] border border-border rounded px-1.5 py-0.5 text-text-muted">{job.backend === "managed" ? "托管计划 · 自动补跑" : isSystem ? "情报矩阵 · 系统任务" : "旧 cron"}</span>
             <span className={cn("text-xs", !job.enabled ? "text-text-muted" : state?.status === "ok" ? "text-success" : "text-warning")}>{!job.enabled ? "已暂停" : state ? (job.backend === "managed" && state.status === "ok" ? "正常" : STATUS[state.status]) : "待验证"}</span></div>
           <p className="mt-1.5 text-sm text-text-muted">{job.schedule_label || scheduleSummary(expression(job))}{job.backend === "managed" && <span className="ml-2 text-xs">· {job.timezone === "local" ? timezone : job.timezone}</span>}</p>
+          {isSystem && !job.enabled && <p className="mt-1 text-xs text-warning">已暂停：情报矩阵不会自动运行，恢复后按原频率继续。</p>}
         </div>
         {editable && <div className="flex gap-1">
           <button className="btn text-xs" disabled={!!busy} onClick={() => openEdit(job)} aria-label={`编辑 ${job.id}`}><Pencil className="w-3 h-3" />编辑</button>
           <button className="btn text-xs" disabled={!!busy} onClick={() => mutate(job, false)} aria-label={`${job.enabled ? "暂停" : "启用"} ${job.id}`}>{job.enabled ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}{job.enabled ? "暂停" : "启用"}</button>
-          <button className="btn text-danger" disabled={!!busy} onClick={() => mutate(job, true)} aria-label={`删除 ${job.id}`}><Trash2 className="w-3 h-3" /></button>
+          <button className="btn btn-danger text-xs" disabled={!!busy} onClick={() => mutate(job, true)} aria-label={`删除 ${job.id}`} title={isSystem ? "删除（可恢复）" : "删除"}><Trash2 className="w-3 h-3" /></button>
         </div>}</div>
-        <div className="grid sm:grid-cols-2 gap-2 text-xs"><p><span className="text-text-muted mr-2">下次计划</span>{!job.enabled ? "暂停期间不执行" : job.next_runs?.[0] ? displayTime(job.next_runs[0]) : job.backend === "launchd" ? "由系统安排检查" : "暂无预览"}</p><p><span className="text-text-muted mr-2">{job.backend === "managed" ? "最近执行" : "最近运行证据"}</span>{displayTime(state?.last_ran_at)}</p></div>
+        <div className="grid sm:grid-cols-2 gap-2 text-xs"><p><span className="text-text-muted mr-2">下次计划</span>{!job.enabled ? "暂停期间不执行" : job.next_runs?.[0] ? displayTime(job.next_runs[0]) : isSystem ? "由系统安排检查" : "暂无预览"}</p><p><span className="text-text-muted mr-2">{job.backend === "managed" ? "最近执行" : "最近运行证据"}</span>{displayTime(state?.last_ran_at)}</p></div>
         {state && <div role={state.status === "overdue" ? "alert" : undefined} className={cn("text-xs p-2.5 rounded bg-bg-hover", state.status === "overdue" ? "text-danger" : "text-text-muted")}>
           {state.status === "overdue" && <p className="flex gap-1.5 items-center font-medium mb-1"><AlertTriangle className="w-3.5 h-3.5" />{job.backend === "managed" ? "执行异常" : "漏跑"}：{job.id}</p>}
           {state.status === "paused" && <p className="mb-1">已暂停：{job.id}</p>}{state.detail}
@@ -273,11 +326,23 @@ export function SchedulerPage() {
         {job.backend === "managed" ? <div className="space-y-3 border-t border-border pt-2">
           <div className="flex flex-wrap justify-between gap-2 text-xs text-text-muted"><span>{job.missed_policy === "skip" ? "错过即跳过" : "错过时合并补跑"} · 失败最多重试 {job.max_retries} 次</span><button className="text-accent" onClick={() => setHistoryId(historyId === job.id ? "" : job.id)}>{historyId === job.id ? "收起执行记录" : "查看执行记录"}</button></div>
           {historyId === job.id && <ScheduleRuns id={job.id} />}
-        </div> : <details className="text-xs text-text-muted"><summary className="cursor-pointer">{editable ? "查看执行命令" : "系统管理说明"}</summary><div className="mt-2 space-y-2">
-          {!editable && <p>此任务由系统安装脚本管理，本页只读。调整后需重新安装；不要在轮次运行中重新加载任务。</p>}
+        </div> : <details className="text-xs text-text-muted"><summary className="cursor-pointer">{isSystem ? "系统任务说明" : "查看执行命令"}</summary><div className="mt-2 space-y-2">
+          {isSystem
+            ? <p>直接修改已安装的 launchd 配置：{SYSTEM_HINT[job.kind || ""] || "只支持固定触发时间。"}重新运行 <code>bash scripts/install_launchd.sh</code> 会用模板覆盖这里的修改；不要在轮次运行中重新加载任务。</p>
+            : !editable && <p>此任务由系统管理，本页只读。</p>}
           <code className="block whitespace-pre-wrap break-all">{job.command}</code>
         </div></details>}
       </div>;
-    })}</div>}
+    })}{removed.length > 0 && <div className="card border-warning/40 p-4 space-y-3">
+      <div className="text-sm"><p className="font-medium">已删除的系统任务</p><p className="text-xs text-text-muted mt-1">情报矩阵不会自动运行，恢复后按删除前的频率继续。</p></div>
+      <div className="space-y-2">{removed.map(job => <div key={`${job.label}-${job.deleted_at}`} className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-mono break-all">{job.label}</span>
+        <span className="text-text-muted">{job.schedule || "频率未知"}</span>
+        <span className="text-text-muted">· 删除于 {displayTime(job.deleted_at)}</span>
+        <button className="btn text-xs ml-auto" disabled={!!busy} onClick={() => restore(job)}>
+          {busy === job.label ? "恢复中…" : "恢复"}<RotateCcw className="w-3 h-3" />
+        </button>
+      </div>)}</div>
+    </div>}</div>}
   </div>;
 }

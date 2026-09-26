@@ -367,3 +367,118 @@ describe("write failures stay visible", () => {
     expect(screen.getByText("夜间巡检")).toBeTruthy();
   });
 });
+
+describe("Scheduler matrix system tasks", () => {
+  const DAILY = "com.arec.pipeline.daily";
+  const CATCHUP = "com.arec.pipeline.catchup";
+
+  const SYSTEM = [
+    {
+      id: DAILY, backend: "launchd", kind: "daily", editable: true, installed: true, loaded: true,
+      enabled: true, minute: "0", hour: "6", command: "ensure_round.py", schedule: "0 6 * * *",
+      title: "情报矩阵 · 每日运行", schedule_label: "每天 06:00", next_runs: ["2026-09-27T06:00:00+08:00"],
+    },
+    {
+      id: CATCHUP, backend: "launchd", kind: "interval", editable: true, installed: true, loaded: true,
+      enabled: true, minute: "", hour: "", command: "ensure_round.py", schedule: "*/30 * * * *",
+      title: "情报矩阵 · 漏跑补偿", schedule_label: "每 30 分钟检查", next_runs: [],
+    },
+  ];
+
+  function mockSystem(removed: unknown[] = []) {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url);
+      calls.push({ url: path, init });
+      if (path.includes("/preview")) {
+        return jsonResponse({ schedule: "0 6 * * *", timezone: "Asia/Shanghai", next_runs: ["2026-09-27T06:00:00+08:00"] });
+      }
+      if (path.includes("/api/scheduler/jobs")) {
+        return jsonResponse({ jobs: [], project_dir: "/proj", python: "/proj/.venv/bin/python" });
+      }
+      if (path.includes("/restore")) return jsonResponse({ ok: true, label: DAILY, installed: true });
+      if (path.includes("/api/scheduler")) {
+        return jsonResponse({
+          jobs: SYSTEM, total: SYSTEM.length, removed_system_jobs: removed,
+          dispatcher: { online: true, detail: "执行器在线", age_seconds: 3 },
+          health: { jobs: [], overdue: 0, paused: 0, detail: "" },
+        });
+      }
+      return jsonResponse({});
+    }));
+    return calls;
+  }
+
+  it("offers edit, pause and delete on the system tasks", async () => {
+    mockSystem();
+    render(<SchedulerPage />);
+    expect(await screen.findByRole("button", { name: `编辑 ${DAILY}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: `暂停 ${DAILY}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: `删除 ${DAILY}` })).toBeTruthy();
+    expect(screen.getByRole("button", { name: `编辑 ${CATCHUP}` })).toBeTruthy();
+    // The old page said "本页只读" and hid every control.
+    expect(screen.queryByText(/本页只读/)).toBeNull();
+  });
+
+  it("opens the editor on the real cron expression, not undefined fields", async () => {
+    mockSystem();
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: `编辑 ${DAILY}` }));
+    expect(await screen.findByText(/这是情报矩阵的系统任务/)).toBeTruthy();
+    // "0 6 * * *" must decode to 每天 06:00. Before the fix the card carried no
+    // dom/month/dow, so the editor opened on "0 6 undefined undefined undefined".
+    const time = screen.getByLabelText("执行时间") as HTMLInputElement;
+    expect(time.value).toBe("06:00");
+    expect(document.body.textContent).not.toContain("undefined");
+    // A launchd agent has no timezone / missed-policy / retry of its own.
+    expect(screen.queryByLabelText("执行时区")).toBeNull();
+    expect(screen.queryByLabelText("补跑策略")).toBeNull();
+  });
+
+  it("saves only the trigger for a system task", async () => {
+    const calls = mockSystem();
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: `编辑 ${DAILY}` }));
+    const save = (await screen.findByRole("button", { name: /保存修改/ })) as HTMLButtonElement;
+    await waitFor(() => expect(save.disabled).toBe(false));
+    fireEvent.click(save);
+    await waitFor(() => expect(calls.some(c => c.init?.method === "PUT")).toBe(true));
+    const body = JSON.parse(calls.find(c => c.init?.method === "PUT")!.init!.body as string);
+    expect(body).toEqual({ schedule: "0 6 * * *" });
+  });
+
+  it("warns that deleting stops the matrix and can be undone", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = mockSystem();
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: `删除 ${DAILY}` }));
+    expect(confirm).toHaveBeenCalled();
+    expect(String(confirm.mock.calls[0][0])).toContain("不再自动运行");
+    expect(String(confirm.mock.calls[0][0])).toContain("恢复");
+    await waitFor(() => expect(calls.some(c => c.init?.method === "DELETE")).toBe(true));
+  });
+
+  it("pauses a system task through the toggle endpoint", async () => {
+    const calls = mockSystem();
+    render(<SchedulerPage />);
+    fireEvent.click(await screen.findByRole("button", { name: `暂停 ${DAILY}` }));
+    await waitFor(() => expect(calls.some(c => c.url.includes("/toggle"))).toBe(true));
+    expect(calls.find(c => c.url.includes("/toggle"))!.init!.body).toBe(JSON.stringify({ enabled: false }));
+  });
+
+  it("restores a deleted system task", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = mockSystem([{ label: DAILY, kind: "daily", deleted_at: "20260926_101500", schedule: "0 6 * * *" }]);
+    render(<SchedulerPage />);
+    expect(await screen.findByText("已删除的系统任务")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /恢复/ }));
+    await waitFor(() => expect(calls.some(c => c.url.includes(`${DAILY}/restore`) && c.init?.method === "POST")).toBe(true));
+  });
+
+  it("does not offer restore for a plan that was never a system task", async () => {
+    mockSystem([]);
+    render(<SchedulerPage />);
+    await screen.findByRole("button", { name: `编辑 ${DAILY}` });
+    expect(screen.queryByText("已删除的系统任务")).toBeNull();
+  });
+});
