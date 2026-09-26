@@ -332,8 +332,15 @@ def create_share(payload: dict, request: Request, user=Depends(require_editor)):
 
 
 @router.get("/html")
-def report_html(path: str, download: bool = False, user=Depends(require_viewer)):
-    """Standalone HTML export of a report (printable to PDF)."""
+def report_html(path: str, download: bool = True, user=Depends(require_viewer)):
+    """Standalone HTML export of a report (printable to PDF).
+
+    Downloads by default. The body is model output, so it is sanitized, and
+    serving it inline would put untrusted markup on the app's own origin -- the
+    caller has to ask for ``download=false`` to render it in a tab.
+    """
+    from urllib.parse import quote
+
     from fastapi.responses import HTMLResponse
 
     from core.render import render_report_html
@@ -345,9 +352,22 @@ def report_html(path: str, download: bool = False, user=Depends(require_viewer))
 
     title = os.path.splitext(os.path.basename(safe))[0]
     document = render_report_html(title, content)
-    headers = {}
+    headers = {
+        # Belt and braces alongside sanitizing: even if something executable
+        # ever survived, the browser would refuse to run it.
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; "
+            "sandbox"
+        ),
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
     if download:
-        headers["Content-Disposition"] = f'attachment; filename="{title}.html"'
+        # RFC 5987: a report name may contain quotes or newlines, which would
+        # otherwise make the header value illegal.
+        headers["Content-Disposition"] = (
+            f"attachment; filename*=UTF-8''{quote(title + '.html')}"
+        )
     return HTMLResponse(document, headers=headers)
 
 

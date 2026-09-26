@@ -1,10 +1,41 @@
-"""Markdown → standalone HTML rendering for report export."""
+"""Markdown → standalone HTML rendering for report export.
+
+A report body is model output conditioned on web pages, so it is untrusted
+input: python-markdown passes raw HTML straight through by design, and this
+document is served from the app's own origin. Everything the renderer emits is
+therefore sanitized before templating.
+"""
 
 from __future__ import annotations
 
 import html
 
 import markdown as md
+import nh3
+
+# Enough to render a research report: structure, tables, code, links, images.
+# Notably absent: script, style, iframe, object, embed, form.
+_ALLOWED_TAGS = {
+    "a", "abbr", "b", "blockquote", "br", "caption", "code", "col", "colgroup",
+    "dd", "del", "details", "div", "dl", "dt", "em", "figcaption", "figure",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "i", "img", "ins", "kbd", "li",
+    "mark", "ol", "p", "pre", "q", "s", "samp", "section", "small", "span",
+    "strong", "sub", "summary", "sup", "table", "tbody", "td", "tfoot", "th",
+    "thead", "tr", "u", "ul", "var",
+}
+_ALLOWED_ATTRS = {
+    "*": {"id", "class", "title"},
+    # No "rel" here: link_rel below sets it on every link, and nh3 rejects both
+    # being configured at once.
+    "a": {"href", "title"},
+    "img": {"src", "alt", "title", "width", "height"},
+    "td": {"colspan", "rowspan", "align"},
+    "th": {"colspan", "rowspan", "align", "scope"},
+    "ol": {"start"},
+    "details": {"open"},
+}
+# Web links and embedded images only: no javascript:, data: or file: URLs.
+_ALLOWED_SCHEMES = {"http", "https", "mailto", "ftp"}
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="zh">
@@ -37,13 +68,30 @@ _TEMPLATE = """<!DOCTYPE html>
 """
 
 
+def sanitize_html(fragment: str) -> str:
+    """Strip anything executable from an HTML fragment.
+
+    An allowlist, not a blocklist: the input is model output, so unknown tags
+    are removed rather than a hand-maintained list of "bad" ones being trusted
+    to stay complete.
+    """
+    return nh3.clean(
+        fragment or "",
+        tags=_ALLOWED_TAGS,
+        attributes=_ALLOWED_ATTRS,
+        url_schemes=_ALLOWED_SCHEMES,
+        link_rel="noopener noreferrer",
+        strip_comments=True,
+    )
+
+
 def render_markdown(text: str) -> str:
-    """Render Markdown to an HTML fragment (GFM tables, fenced code)."""
-    return md.markdown(
+    """Render Markdown to a sanitized HTML fragment (GFM tables, fenced code)."""
+    return sanitize_html(md.markdown(
         text or "",
         extensions=["tables", "fenced_code", "sane_lists", "toc"],
         output_format="html5",
-    )
+    ))
 
 
 def render_report_html(title: str, text: str) -> str:

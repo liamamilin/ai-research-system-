@@ -23,6 +23,7 @@ Configured via ``system.yaml``::
 
 from __future__ import annotations
 
+import fnmatch
 import glob
 import json
 import logging
@@ -32,6 +33,51 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
+
+# Files the agent's read_file / list_files tools must never reach, even though
+# they sit inside the workspace. The workspace is the project root, so it also
+# holds .env (the JWT signing key), the user database, and the session store.
+#
+# This matters because the model's inputs are attacker-influenced: search
+# results are fed into its context verbatim, so a poisoned page can try to talk
+# it into reading these. An editor-level job plus one share link is otherwise
+# enough to walk away with the signing key.
+_SENSITIVE_NAMES = (
+    ".env", ".env.*",
+    "*.db", "*.db-wal", "*.db-shm", "*.sqlite", "*.sqlite3",
+    "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore",
+    "id_rsa", "id_ed25519", ".netrc", ".htpasswd",
+)
+_SENSITIVE_DIRS = (
+    ".git", "state", "config", "secrets", ".ssh", ".aws", ".config",
+)
+
+
+def is_sensitive_path(path: str, workspace: str) -> bool:
+    """Whether ``path`` holds credentials rather than research material.
+
+    Checked on the resolved real path, so ``output/../.env`` and a symlink into
+    ``state/`` are both caught.
+    """
+    try:
+        relative = os.path.relpath(os.path.realpath(path), os.path.realpath(workspace))
+    except ValueError:
+        return False  # different drive on Windows; the caller already refused
+    if relative.startswith(".."):
+        return False  # outside the workspace; containment handles that
+    parts = relative.split(os.sep)
+    for index, part in enumerate(parts):
+        if part in _SENSITIVE_DIRS:
+            return True
+        if index == len(parts) - 1 and any(
+            fnmatch.fnmatch(part, pattern) for pattern in _SENSITIVE_NAMES
+        ):
+            return True
+    return False
+
+
+# Kept as a module-level alias so the tool methods read cleanly.
+_is_sensitive_path = is_sensitive_path
 
 from .errors import CancelledError, LLMError, LLMUnsupportedError
 from .llm import LLMClient, LLMConfig
@@ -156,6 +202,18 @@ class ResearchAgent:
             if url:
                 self.retrieved_urls.add(url)
 
+    def _remember_urls_in(self, text: str) -> None:
+        """Count URLs the model *read* as traceable too.
+
+        A synthesis stage legitimately cites URLs it found in the upstream radar
+        documents rather than in its own search results. Only counting searches
+        made those look like fabrications: one round's P7 was flagged at 0%
+        coverage with 124 "unmatched" URLs, all of them real citations inherited
+        from P1-P6.
+        """
+        for url in _URL_RE.findall(text or ""):
+            self.retrieved_urls.add(url.rstrip(".,;)]}'\""))
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -228,9 +286,21 @@ class ResearchAgent:
 
             if not response.tool_calls:
                 content = response.content.strip()
+                # A run that stopped on the output token limit produced half a
+                # document. Saving that as the day's report is worse than
+                # failing, so it is caught here rather than downstream.
+                if response.finish_reason == "length":
+                    raise LLMError(
+                        f"模型输出在 {self.llm.config.max_tokens} tokens 处被截断，"
+                        "报告不完整；请提高 ai.max_tokens 或缩小任务范围"
+                    )
                 # Accept short replies when no research was performed: the
                 # model decided the task needs no tools (e.g. sanity tests).
                 if self._tools_used == 0 or len(content) >= self.config.min_report_chars:
+                    problem = report_problem(content, self._tools_used,
+                                             self.config.min_report_chars)
+                    if problem:
+                        raise LLMError(f"模型输出不是可用报告：{problem}")
                     self._log_usage()
                     return content
                 logger.warning(
@@ -331,6 +401,7 @@ class ResearchAgent:
         except OSError as exc:
             return f"Error: cannot read {path}: {exc}"
         logger.info("Tool read_file: %s (%d chars)", path, len(content))
+        self._remember_urls_in(content)
         return self._truncate(
             f"# {path}\n\n{content}", self.config.max_file_chars
         )
@@ -457,6 +528,9 @@ class ResearchAgent:
         if resolved != self.workspace and not resolved.startswith(
             self.workspace + os.sep
         ):
+            return None
+        if _is_sensitive_path(resolved, self.workspace):
+            logger.warning("Tool read refused for sensitive path: %s", path)
             return None
         return resolved
 
@@ -594,3 +668,9 @@ def _tool_definitions() -> list[dict]:
             },
         },
     ]
+
+
+def report_problem(content: str, tools_used: int = 0,
+                   min_chars: int = 400) -> Optional[str]:
+    """Placeholder; the real check lands in the next commit."""
+    return None

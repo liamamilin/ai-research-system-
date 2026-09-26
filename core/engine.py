@@ -16,6 +16,7 @@ from typing import Optional
 from .config import load_system_config, load_job, list_jobs
 from .errors import CancelledError
 from .extractor import extract_report
+from .fileio import atomic_write
 from .llm import LLMConfig
 from .lock import LockManager, LockAcquireError
 from .research import ResearchAgent, ResearchConfig
@@ -270,10 +271,13 @@ class ResearchEngine:
                          fields={"job": job_name, "status": "failed"})
             return None
         finally:
-            # Restore the stashed report when this run produced no new file
+            # Restore the stashed report when this run produced no new file.
+            # "Produced a new file" means non-empty: _save_output is atomic now,
+            # so a zero-byte file at output_path can only be a leftover, and
+            # treating it as success would delete the good report we stashed.
             if prev_path and output_path:
                 try:
-                    if os.path.exists(output_path):
+                    if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                         os.remove(prev_path)   # fresh report saved
                     elif os.path.exists(prev_path):
                         os.replace(prev_path, output_path)
@@ -340,6 +344,7 @@ class ResearchEngine:
             "recent_outcomes": self._outcomes_block(),
             "reported_events": self._reported_events(),
         }
+        pass
 
         # Simple {var} substitution
         result = template
@@ -523,6 +528,11 @@ class ResearchEngine:
 
         If the file already exists, appends a numeric suffix (``_1``, ``_2``,
         etc.) before the extension to avoid overwriting.
+
+        The write is atomic (temp file + rename). A plain ``open(path, "w")``
+        truncates before the first byte lands, so a crash or a full disk
+        mid-write left a partial report that ``run_job``'s cleanup then treated
+        as success -- deleting the stashed previous one.
         """
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
@@ -533,7 +543,6 @@ class ResearchEngine:
             final_path = f"{root}_{counter}{ext}"
             counter += 1
 
-        with open(final_path, "w", encoding="utf-8") as f:
-            f.write(content)
+        atomic_write(final_path, content)
         logger.debug("Saved output to %s", final_path)
         return final_path

@@ -145,6 +145,35 @@ def create_app() -> FastAPI:
             pass
         return response
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        """Baseline hardening headers on every response.
+
+        `Referrer-Policy: no-referrer` is not cosmetic here: share tokens live
+        in the URL path (``/api/share/{token}``), so without it every outbound
+        link from a shared report leaks the token to the destination.
+        `frame-ancestors 'none'` stops the console being framed for clickjacking.
+        """
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            # The SPA is a Vite build with hashed assets; no inline script and
+            # no remote origins. Monaco is fetched from jsDelivr at runtime
+            # unless self-hosted, so it is the one thing still allowed out.
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; "
+            "connect-src 'self'; font-src 'self' data:; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; "
+            "frame-ancestors 'none'",
+        )
+        if settings.auth.cookie_secure:
+            response.headers.setdefault(
+                "Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
     # CORS for dev mode
     if settings.cors.enabled:
         app.add_middleware(

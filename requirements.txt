@@ -15,6 +15,7 @@ python-multipart>=0.0.9
 watchfiles>=0.21
 python-dotenv>=1.0
 markdown>=3.5              # HTML export for reports
+nh3>=0.2.15                # sanitize that export (report bodies are untrusted)
 
 # Optional: keyless DuckDuckGo fallback for web search
 # duckduckgo-search>=6.0
