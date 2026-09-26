@@ -158,7 +158,13 @@ export function ReportViewPage() {
   });
 
   const handleExportHtml = () => {
-    window.open(`/api/reports/html?path=${encodeURIComponent(path)}&download=true`, "_blank");
+    // noopener: without it the exported document gets a live handle on this
+    // window, and the body is model output rather than something we authored.
+    window.open(
+      `/api/reports/html?path=${encodeURIComponent(path)}&download=true`,
+      "_blank",
+      "noopener",
+    );
   };
 
   const handleEmail = () => runAction("email", async () => {
