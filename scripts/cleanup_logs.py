@@ -1,61 +1,34 @@
 #!/usr/bin/env python3
+"""Deprecated: use ``scripts/maintenance.py``.
+
+This script only globbed ``logs/*.log*``, so it could never reach
+logs/schedules, logs/jobs or logs/openai, where most of the volume was -- and
+nothing invoked it anyway. Kept as a thin shim so anything that still calls it
+gets the real implementation.
 """
-日志清理脚本
-清理旧的日志文件，保留最近的日志文件
-"""
 
-import os
-import glob
-from datetime import datetime, timedelta
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.maintenance import prune_logs  # noqa: E402
 
 
-def cleanup_logs(logs_dir: str = "logs", days: int = 7):
-    """
-    清理旧的日志文件
-    
-    Args:
-        logs_dir: 日志目录
-        days: 保留天数
-    """
-    if not os.path.exists(logs_dir):
-        print(f"日志目录不存在: {logs_dir}")
-        return
-    
-    # 获取当前时间
-    now = datetime.now()
-    cutoff_time = now - timedelta(days=days)
-    
-    # 查找所有日志文件
-    log_files = glob.glob(os.path.join(logs_dir, "*.log*"))
-    
-    deleted_count = 0
-    total_size = 0
-    
-    for log_file in log_files:
-        # 获取文件修改时间
-        mtime = datetime.fromtimestamp(os.path.getmtime(log_file))
-        
-        # 如果文件超过保留天数，删除
-        if mtime < cutoff_time:
-            file_size = os.path.getsize(log_file)
-            os.remove(log_file)
-            deleted_count += 1
-            total_size += file_size
-            print(f"已删除: {log_file} ({file_size / 1024:.2f} KB)")
-    
-    print(f"\n清理完成！")
-    print(f"删除文件数: {deleted_count}")
-    print(f"释放空间: {total_size / 1024:.2f} KB")
-    print(f"保留天数: {days} 天")
+def cleanup_logs(logs_dir: str = "logs", days: int = 7) -> None:
+    print(f"已合并到 scripts/maintenance.py；转发到 prune_logs（保留 {days} 天）")
+    print(prune_logs(Path(logs_dir), days, dry_run=False))
 
 
 if __name__ == "__main__":
     import argparse
-    
-    parser = argparse.ArgumentParser(description="清理旧的日志文件")
-    parser.add_argument("--dir", default="logs", help="日志目录（默认：logs）")
-    parser.add_argument("--days", type=int, default=7, help="保留天数（默认：7）")
-    
+
+    parser = argparse.ArgumentParser(description="（已废弃）请改用 scripts/maintenance.py")
+    parser.add_argument("--dir", default="logs")
+    parser.add_argument("--days", type=int, default=7)
     args = parser.parse_args()
-    
     cleanup_logs(args.dir, args.days)

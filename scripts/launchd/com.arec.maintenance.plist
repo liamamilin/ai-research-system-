@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arec.maintenance</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>@PYTHON@</string>
+    <string>@SCRIPT_DIR@/maintenance.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>@REPO@</string>
+
+  <!-- Early morning, before the 06:00 round: reclaim the index, drop expired
+       sessions, prune logs and backups. Nothing here is required for the
+       console to run, so a failure is logged and retried tomorrow rather than
+       alerting anyone. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>@LOG_DIR@/maintenance.log</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG_DIR@/maintenance.err.log</string>
+</dict>
+</plist>
