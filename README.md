@@ -159,6 +159,37 @@ bash scripts/build_launcher.sh ~/Applications  # 构建并安装到「应用程�
 `build_launcher.sh` 用 `osacompile -s`（stay-open）编译：不带 `-s` 的
 applet 在 `run` 返回后立即退出，`on idle` 看门狗永远不会执行。
 
+### 常驻网关：URL 永不掉线 + 手机访问
+
+闲置退出只关掉启动器 applet，服务本身会继续跑，所以 URL 平时不会因空闲而失效。
+真正让它失效的是**重启、崩溃，或 applet 回收无响应进程** —— 此时没有任何进程监听
+8765，浏览器被直接拒绝，而浏览器无法把应用拉起来。
+
+启用常驻网关后，网关占住对外端口并按需拉起应用：
+
+```
+浏览器 / 手机 ──▶ 网关 :8765 ──▶ 应用 :8766（仅 127.0.0.1）
+                      └── 应用不在？拉起它，显示「启动中」，就绪后继续
+```
+
+```bash
+# config/web.yaml 里把 gateway.enabled 设为 true，然后：
+bash scripts/install_launchd.sh      # 安装 com.arec.gateway（开机自启、崩溃自动重启）
+python scripts/gateway.py --status   # 查看状态
+```
+
+效果：收藏 `http://127.0.0.1:8765` 后，**应用退出、崩溃甚至重启后，浏览器访问
+该地址都会自动拉起并进入**（约 12 秒，页面显示启动进度）。
+
+**手机访问**：在「设置 → 局域网访问」里打开开关，网关改为监听 `0.0.0.0`，页面会给出
+手机可用的地址（需与电脑同一 WiFi）。默认关闭；打开后同网段设备能看到登录页，当前
+是 HTTP 明文，凭证会在网络中传输。详见 [spec/gateway.md](spec/gateway.md)。
+
+### 记住我
+
+登录页的「记住我」把会话从 7 天延长到 30 天，并只记住**用户名**（下次自动填好）。
+密码不写入任何存储：延长的是 httpOnly 的 refresh cookie 及其有效期，由浏览器自己持有。
+
 ### Web UI
 
 ```bash

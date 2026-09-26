@@ -26,9 +26,15 @@ type RequestOpts = {
 };
 
 let onAuthError: (() => void) | null = null;
+// Set once a session is declared dead. Without this, an expired session 401s on
+// /api/auth/refresh, which 401s, which calls logout(), whose own request 401s
+// again -- a loop that hammers the API and ends up logging the user out over a
+// transient failure.
+let _sessionExpired = false;
 
 export function setAuthErrorHandler(handler: (() => void) | null) {
   onAuthError = handler;
+  _sessionExpired = false;
 }
 
 // --- Token refresh ---
@@ -123,8 +129,9 @@ export async function api<T = unknown>(
       if (ok) return api<T>(path, opts, true);
     }
 
-    // If refresh failed or already retried, fire the logout callback
-    if (resp.status === 401 && onAuthError) {
+    // If refresh failed or already retried, fire the logout callback -- once.
+    if (resp.status === 401 && onAuthError && !_sessionExpired) {
+      _sessionExpired = true;
       onAuthError();
     }
 

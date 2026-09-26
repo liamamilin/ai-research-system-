@@ -89,10 +89,36 @@ class ServerConfig(BaseModel):
     base_url: str = "http://127.0.0.1:8765"
 
 
+class GatewayConfig(BaseModel):
+    """The permanent front door in front of the app.
+
+    The gateway owns the public port and starts the app on demand, so a
+    bookmarked URL keeps working after the 30-minute idle shutdown, a crash, or
+    a reboot -- and it is the only piece that has to bind a LAN address for
+    phone access.
+    """
+
+    enabled: bool = False
+    # Where the app itself listens. Loopback only, never exposed.
+    app_port: int = 8766
+    # Off by default: binding 0.0.0.0 puts the console on the local network.
+    lan_access: bool = False
+    lan_host: str = ""
+    # How long a browser waits on the "starting" page before giving up.
+    startup_timeout: int = 180
+    # Minimum gap between two spawn attempts, so a boot loop cannot fork a
+    # server every request.
+    respawn_cooldown: int = 10
+    # Health probe timeout. Kept short: it runs on the request path.
+    health_timeout: float = 2.0
+
+
 class AuthConfig(BaseModel):
     secret_key: str = "CHANGE_ME"
     access_token_minutes: int = 15
     refresh_token_days: int = 7
+    # Session length when the login form's "remember me" is ticked.
+    remember_token_days: int = 30
     cookie_secure: bool = False
     cookie_samesite: str = "strict"
 
@@ -121,6 +147,27 @@ class WebSettings(BaseModel):
     cors: CorsConfig = Field(default_factory=CorsConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
     paths: PathsConfig = Field(default_factory=PathsConfig)
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    # Absolute path of the YAML these settings were read from. Not a config key:
+    # it is filled in by load() so writers can find the real file.
+    source_path: str = ""
+
+    def app_port(self) -> int:
+        """The port the app binds.
+
+        With the gateway in front, the app moves off the public port so exactly
+        one process owns the URL the browser (and the phone) talks to.
+        """
+        return self.gateway.app_port if self.gateway.enabled else self.server.port
+
+    def bind_host(self) -> str:
+        """The address the *front door* listens on.
+
+        Only the gateway ever binds 0.0.0.0; the app stays on loopback.
+        """
+        if self.gateway.enabled and self.gateway.lan_access:
+            return "0.0.0.0"
+        return self.server.host
 
     @classmethod
     def load(cls, config_path: str | None = None) -> "WebSettings":
@@ -140,6 +187,11 @@ class WebSettings(BaseModel):
                 data = yaml.safe_load(f) or {}
 
         settings = cls(**data)
+        # Remember where these settings actually came from. Anything that writes
+        # configuration back has to touch *this* file: deriving the path from
+        # paths.config_dir would silently edit a different file whenever
+        # AI_RESEARCH_WEB_CONFIG points elsewhere.
+        settings.source_path = str(Path(path).resolve())
         env = detect_environment()
 
         # Env override for secrets (WEB_SECRET_KEY kept for older .env files)

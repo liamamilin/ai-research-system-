@@ -22,10 +22,18 @@ def create_token(
     username: str,
     role: str,
     kind: Literal["access", "refresh"],
+    ttl_seconds: int | None = None,
 ) -> tuple[str, str, int]:
-    """Return (token, jti, expires_at)."""
+    """Return (token, jti, expires_at).
+
+    ``ttl_seconds`` overrides the configured lifetime, which "remember me"
+    needs: a cookie that outlives its own token only produces a 401 at the next
+    refresh, so the two have to be chosen together.
+    """
     settings = get_settings()
-    if kind == "access":
+    if ttl_seconds is not None:
+        ttl = max(1, int(ttl_seconds))
+    elif kind == "access":
         ttl = settings.auth.access_token_minutes * 60
     else:
         ttl = settings.auth.refresh_token_days * 86400

@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { errorMessage } from "@/lib/toast";
 import { ErrorState } from "@/components/ErrorState";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
-import { Trash2 } from "lucide-react";
+import { Trash2, RefreshCw, Copy, Check } from "lucide-react";
 import { SystemConfig } from "@/components/SystemConfig";
 
 type SettingsTab = "system" | "users" | "audit" | "logs";
@@ -56,6 +56,11 @@ export function SettingsPage() {
       {tab === "users" && <UserManagement />}
       {tab === "audit" && <AuditLog />}
       {tab === "logs" && <GlobalLogs />}
+
+      {/* At the bottom on purpose: the phone link is a lookup, not a daily
+          control, so it should be findable without competing with the tab
+          content for attention. */}
+      <AccessCard />
     </div>
   );
 }
@@ -361,8 +366,159 @@ function GlobalLogs() {
           <ShutdownButton />
         </div>
       </div>
+
     </div>
   );
+}
+
+interface GatewayInfo {
+  enabled: boolean;
+  lan_access: boolean;
+  local_url: string;
+  lan_url: string;
+  lan_address: string;
+  public_port: number;
+  app_port: number;
+  secure_cookies: boolean;
+  restart_required?: boolean;
+  restart_hint?: string;
+}
+
+/** A single link with an icon-only copy button: compact, and still pasteable. */
+function UrlChip({ label, url }: { label: string; url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Clipboard needs a secure context; on plain-HTTP LAN the read-only
+      // field below is still selectable by hand.
+      const field = document.getElementById(`url-${label}`) as HTMLInputElement | null;
+      field?.select();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return <span className="inline-flex items-center gap-1">
+    <span className="text-text-muted">{label}</span>
+    <input id={`url-${label}`} readOnly value={url}
+      onFocus={(e) => e.currentTarget.select()}
+      aria-label={`${label}链接`}
+      className="input font-mono text-xs w-44 sm:w-52 py-0.5" />
+    <button className="btn text-xs py-0.5 px-1.5 shrink-0" onClick={copy}
+      aria-label={`复制${label}链接`} title={copied ? "已复制" : "复制"}>
+      {copied ? <Check className="w-3 h-3 text-success" /> : <Copy className="w-3 h-3" />}
+    </button>
+  </span>;
+}
+
+/**
+ * Access addresses, kept deliberately quiet.
+ *
+ * This is a lookup ("what's the phone link again?"), not a control you touch
+ * daily, so it lives at the bottom of the page as a single line and keeps the
+ * LAN switch and its warnings behind a disclosure.
+ */
+function AccessCard() {
+  const [info, setInfo] = useState<GatewayInfo | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [restart, setRestart] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      setInfo(await api<GatewayInfo>("/api/gateway"));
+    } catch (err) {
+      setError(errorMessage(err, "读取访问地址失败"));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const toggle = async (next: boolean) => {
+    setBusy(true); setError(""); setRestart("");
+    try {
+      const result = await api<GatewayInfo>("/api/gateway", {
+        method: "PUT", body: { lan_access: next },
+      });
+      setInfo(result);
+      if (result.restart_required) setRestart(result.restart_hint || "");
+    } catch (err) {
+      setError(errorMessage(err, "保存失败"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (error && !info) {
+    return <div role="alert" className="text-xs text-text-muted">读取访问地址失败：{error}</div>;
+  }
+  if (!info) return null;
+
+  const phone = info.lan_access && info.lan_url ? info.lan_url : "";
+
+  return <div className="border-t border-border pt-3 mt-2">
+    <details className="text-xs">
+      <summary className="cursor-pointer text-text-muted select-none flex flex-wrap items-center gap-2">
+        <span>访问地址</span>
+        {info.lan_access
+          ? <span className="text-success">· 手机可访问</span>
+          : <span>· 仅本机</span>}
+        {/* The links stay in the summary line: this is the thing you came to
+            read, and it should not require expanding anything. */}
+        <span className="flex flex-wrap items-center gap-3 ml-1" onClick={(e) => e.preventDefault()}>
+          <UrlChip label="本机" url={info.local_url} />
+          {phone ? <UrlChip label="手机" url={phone} /> : null}
+        </span>
+        <button className="btn text-xs py-0.5 px-1.5 ml-auto shrink-0" onClick={load}
+          disabled={busy} aria-label="刷新访问地址" title="刷新">
+          <RefreshCw className={cn("w-3 h-3", loading && "animate-spin")} />
+        </button>
+      </summary>
+
+      <div className="mt-2.5 space-y-2 pl-1">
+        {error ? <div role="alert" className="text-danger">{error}</div> : null}
+
+        {!info.enabled ? (
+          <p className="text-text-muted">
+            常驻网关未启用，应用直接监听 {info.public_port} 端口。把
+            <code className="mx-1">config/web.yaml</code> 的
+            <code className="mx-1">gateway.enabled</code> 设为 true，再运行
+            <code className="mx-1">bash scripts/install_launchd.sh</code>，
+            收藏的地址就能在应用退出后自动拉起。
+          </p>
+        ) : (
+          <>
+            <p className="text-text-muted">
+              收藏「本机」地址：应用退出、崩溃甚至重启后打开它，会自动拉起（约 12 秒）。
+              {!phone && " 手机访问未开启，展开后可开启。"}
+            </p>
+            <label className="flex items-start gap-2 text-text-muted cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={info.lan_access}
+                disabled={busy} onChange={(e) => toggle(e.target.checked)} />
+              <span>允许同一 WiFi 下的设备访问
+                {!info.secure_cookies && (
+                  <span className="block text-text-muted">
+                    开启后网关监听 0.0.0.0。当前是 HTTP 明文，账号密码会在网络中传输，请只在可信网络开启。
+                  </span>
+                )}
+              </span>
+            </label>
+          </>
+        )}
+
+        {restart ? (
+          <div role="alert" className="text-warning space-y-1">
+            <p>配置已保存，但监听地址要重启网关才生效：</p>
+            <code className="block bg-bg-hover rounded px-2 py-1 font-mono break-all">{restart}</code>
+          </div>
+        ) : null}
+      </div>
+    </details>
+  </div>;
 }
 
 function ShutdownButton() {

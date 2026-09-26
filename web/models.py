@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 class LoginRequest(BaseModel):
     username: str
     password: str
+    # Ask for the longer session. The password itself is never stored anywhere.
+    remember: bool = False
 
 
 class UserOut(BaseModel):

@@ -16,7 +16,11 @@ from web.settings import detect_environment, get_settings
 
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
-PID_FILE = "state/server.pid"
+# Same absolute location run_web.py writes, so shutdown finds it regardless of
+# the server process's working directory.
+PID_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "state", "server.pid")
 
 
 @router.get("/status")

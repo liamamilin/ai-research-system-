@@ -32,6 +32,7 @@ from web.routes.tracking import router as tracking_router
 from web.routes.share import router as share_router
 from web.routes.qa import router as qa_router
 from web.routes.setup import router as setup_router
+from web.routes.gateway import router as gateway_router
 from web.runner.registry import TaskRegistry
 from web.settings import get_settings
 from web.indexer import db as index_db
@@ -190,6 +191,7 @@ def create_app() -> FastAPI:
     app.include_router(share_router)
     app.include_router(qa_router)
     app.include_router(setup_router)
+    app.include_router(gateway_router)
 
     @app.get("/api/health")
     def health():

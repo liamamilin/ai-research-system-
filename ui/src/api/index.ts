@@ -3,10 +3,10 @@ import type { TokenResponse, User, JobSummary, JobDetail } from "./types";
 
 // --- Auth ---
 
-export async function login(username: string, password: string): Promise<TokenResponse> {
+export async function login(username: string, password: string, remember = false): Promise<TokenResponse> {
   return api("/api/auth/login", {
     method: "POST",
-    body: { username, password },
+    body: { username, password, remember },
   });
 }
 

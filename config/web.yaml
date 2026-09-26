@@ -8,6 +8,8 @@ auth:
   secret_key: "dev-only-change-me-in-production-aaaaaaaaaaaaaaaaaa"
   access_token_minutes: 15
   refresh_token_days: 7
+  # 登录页勾选「记住我」后的会话天数
+  remember_token_days: 30
   cookie_secure: false
   cookie_samesite: "strict"
 
@@ -19,6 +21,16 @@ cors:
 rate_limit:
   login_per_minute: 5
   job_run_per_minute: 10
+
+# 常驻网关：占住对外端口，按需拉起应用。
+# 关掉它 (enabled: false) 时行为与从前一致：应用直接监听 server.port。
+gateway:
+  enabled: true
+  app_port: 8766            # 应用自身端口，只监听 127.0.0.1
+  lan_access: true         # 打开后绑定 0.0.0.0，同一 WiFi 下手机可访问（HTTP 明文）
+  startup_timeout: 180
+  respawn_cooldown: 10
+  health_timeout: 2.0
 
 paths:
   jobs_dir: "jobs"

@@ -6,7 +6,7 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   setUser: (user: User | null) => void;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, remember?: boolean) => Promise<void>;
   logout: () => Promise<void>;
   checkAuth: () => Promise<void>;
 }
@@ -17,8 +17,8 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   setUser: (user) => set({ user, loading: false }),
 
-  login: async (username, password) => {
-    const resp = await authApi.login(username, password);
+  login: async (username, password, remember = false) => {
+    const resp = await authApi.login(username, password, remember);
     set({ user: resp.user, loading: false });
   },
 

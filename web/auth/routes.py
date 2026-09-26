@@ -21,12 +21,16 @@ REFRESH_COOKIE = "ai_research_refresh"
 CSRF_COOKIE = "ai_research_csrf"
 
 
-def _set_auth_cookies(response: Response, access: str, refresh: str, csrf: str):
+def _set_auth_cookies(response: Response, access: str, refresh: str, csrf: str,
+                      remember: bool = False):
     settings = get_settings()
     secure = settings.auth.cookie_secure
     samesite = settings.auth.cookie_samesite  # type: ignore[assignment]
     access_max = settings.auth.access_token_minutes * 60
-    refresh_max = settings.auth.refresh_token_days * 86400
+    # "Remember me" buys a longer session, not a stored password: the refresh
+    # cookie stays httpOnly and only the browser ever holds it.
+    days = settings.auth.remember_token_days if remember else settings.auth.refresh_token_days
+    refresh_max = max(1, days) * 86400
 
     response.set_cookie(
         ACCESS_COOKIE, access,
@@ -42,6 +46,9 @@ def _set_auth_cookies(response: Response, access: str, refresh: str, csrf: str):
         CSRF_COOKIE, csrf,
         max_age=access_max, httponly=False, secure=secure, samesite=samesite, path="/",
     )
+    # Lets a client (and the tests) see which lifetime was actually granted
+    # instead of having to parse Set-Cookie.
+    response.headers["X-Session-Days"] = str(days)
 
 
 def _clear_auth_cookies(response: Response):
@@ -94,8 +101,13 @@ def login(payload: LoginRequest, request: Request, response: Response):
     access, access_jti, access_exp = jwt_helper.create_token(
         user["id"], user["username"], user["role"], "access"
     )
+    # The token's own expiry must match the cookie's, or "remember me" would
+    # still drop the session at the default lifetime.
+    remember_ttl = None
+    if payload.remember:
+        remember_ttl = max(1, get_settings().auth.remember_token_days) * 86400
     refresh, refresh_jti, refresh_exp = jwt_helper.create_token(
-        user["id"], user["username"], user["role"], "refresh"
+        user["id"], user["username"], user["role"], "refresh", ttl_seconds=remember_ttl
     )
     csrf = jwt_helper.new_csrf_token()
 
@@ -106,8 +118,9 @@ def login(payload: LoginRequest, request: Request, response: Response):
     # Reload user to get updated last_login_at
     user = user_db.get_user_by_id(user["id"]) or user
 
-    _set_auth_cookies(response, access, refresh, csrf)
-    audit.log("login", user=payload.username, result="success", ip=ip)
+    _set_auth_cookies(response, access, refresh, csrf, remember=payload.remember)
+    audit.log("login", user=payload.username, result="success", ip=ip,
+              details={"remember": bool(payload.remember)})
 
     return TokenResponse(user=_user_out(user), csrf_token=csrf)
 

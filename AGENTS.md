@@ -57,6 +57,11 @@ React SPA → FastAPI → core/engine.py (with cancel_token + progress_cb)
   JWT auth → role-based access (viewer / editor / admin)
 ```
 
+With `gateway.enabled` (config/web.yaml) a stdlib-only front door owns the public
+port and starts the app on demand, so a bookmarked URL revives the app and the LAN
+switch can expose it to a phone. The app then always listens on
+`gateway.app_port`, loopback only. See `spec/gateway.md`.
+
 ## Conventions
 
 - **Python 3.10+**, type annotations, docstrings on public methods
@@ -65,15 +70,24 @@ React SPA → FastAPI → core/engine.py (with cancel_token + progress_cb)
 - **Config**: YAML only, no Python config files
 - **LLM access**: OpenAI-compatible HTTP API only — never shell out to CLI agents
 - **Frontend**: React 18 + Vite + TypeScript + TailwindCSS
+- **Model output is untrusted**: sanitize HTML before serving it
+  (`core/render.py`), and validate a report before saving it
+  (`core/research.py:report_problem`) — a refusal or an error string must fail
+  the job, not become the day's report
+- **The agent's file tools stay inside the research material**:
+  `core/research.py:is_sensitive_path` refuses `.env`, `*.db` and `config/`
+  even though they sit inside the workspace
 
 ## Scheduling
 
 New recurring plans use `core/schedule_store.py` (SQLite) and the standalone
 `core/schedule_runner.py`, supervised by launchd on macOS. Register a plan through
-Web “周期调度” or the explicit `recurrence` field when creating a job. Run
+Web "周期调度" or the explicit `recurrence` field when creating a job. Run
 `python scripts/install_scheduler.py` to install/verify the dispatcher.
-Do not register new ordinary jobs via cron. Existing cron and the matrix's
-special launchd pipeline remain compatibility paths; see `spec/scheduling.md`.
+Do not register new ordinary jobs via cron. Existing cron remains a compatibility
+path. The matrix's two LaunchAgents (`com.arec.pipeline.daily` /
+`.catchup`) are editable from the same page via `web/services/launchd_agents.py`
+(edit / pause / restorable delete); see `spec/scheduling.md`.
 Tests must isolate state and mock installation; never touch real user cron/agents.
 
 ## Adding a Job

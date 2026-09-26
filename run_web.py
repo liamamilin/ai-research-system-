@@ -18,7 +18,10 @@ import signal
 import sys
 import time
 
-PID_FILE = "state/server.pid"
+# Absolute, so `stop` works no matter where the command was run from. A
+# relative path made the launcher and the gateway (which spawn the app with its
+# own cwd) look in different places, and a missing file reads as "not running".
+PID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state", "server.pid")
 
 
 def cmd_serve(args):
@@ -26,8 +29,16 @@ def cmd_serve(args):
     from web.settings import get_settings
 
     settings = get_settings()
-    host = args.host or settings.server.host
-    port = args.port or settings.server.port
+    # With the gateway in front, the app moves to the internal port so exactly
+    # one process owns the URL a browser (or a phone) talks to. The env var lets
+    # the gateway choose the port without editing config on the fly.
+    env_port = os.environ.get("AI_RESEARCH_APP_PORT", "").strip()
+    port = int(env_port) if env_port.isdigit() else settings.app_port()
+    if not env_port and args.port:
+        port = args.port
+    # The app is loopback-only; which address the front door binds is the
+    # gateway's decision, not this process's.
+    host = "127.0.0.1" if settings.gateway.enabled else (args.host or settings.server.host)
 
     # Write PID file
     os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
@@ -36,6 +47,8 @@ def cmd_serve(args):
 
     print(f"Starting AI Research Console on http://{host}:{port}")
     print(f"(API docs: http://{host}:{port}/docs)")
+    if settings.gateway.enabled:
+        print(f"(behind the gateway -- users should visit {settings.server.base_url}/)")
 
     try:
         uvicorn.run(
@@ -44,6 +57,14 @@ def cmd_serve(args):
             port=port,
             reload=args.reload,
             log_level=args.log_level,
+            # Nothing sits in front of this server that we do not control, and
+            # uvicorn trusts X-Forwarded-* by default. Left on, any loopback
+            # client (the Vite dev proxy, the gateway) could rewrite the peer
+            # address, which is what the login rate limit keys on -- so a
+            # brute-force attempt would get a fresh bucket per request.
+            proxy_headers=False,
+            forwarded_allow_ips="",
+            server_header=False,
         )
     finally:
         try:
