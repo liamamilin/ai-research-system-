@@ -434,9 +434,17 @@ class ResearchAgent:
             len(results),
             "; ".join(queries)[:120],
         )
-        return self._truncate(
+        rendered = self._truncate(
             SearchClient.format_results(results), self.config.max_chars_per_call
         )
+        # Credit every URL the model was actually shown, not just each result's
+        # own link. format_results() renders the excerpts too, and a news
+        # snippet routinely carries an outbound link the model then cites.
+        # Recording only item.url made those look fabricated: the 2026-09-26
+        # research/ai run was flagged at 53% coverage with 42 "unmatched" URLs
+        # that were all real sources the model had read in a snippet.
+        self._remember_urls_in(rendered)
+        return rendered
 
     def _tool_read_file(self, arguments: dict) -> str:
         path = str(arguments.get("path") or "").strip()

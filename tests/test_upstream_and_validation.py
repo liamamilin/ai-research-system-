@@ -9,6 +9,8 @@ read.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from core.research import report_problem
@@ -169,6 +171,65 @@ def test_trailing_punctuation_is_stripped_from_remembered_urls():
     agent.retrieved_urls = set()
     agent._remember_urls_in("来源：(https://a.example/b)。")
     assert agent.retrieved_urls == {"https://a.example/b"}
+
+
+def test_urls_inside_a_search_snippet_count_as_traceable():
+    """A link inside a result's excerpt is something the model was shown.
+
+    format_results() renders the excerpts as well as the links, and a news
+    snippet routinely carries an outbound URL. Recording only each result's own
+    url reported every one of those as fabricated -- the 2026-09-26 research/ai
+    run was flagged at 53% coverage, and the 42 "unmatched" URLs were real
+    sources the model had read.
+    """
+    from core.research import ResearchAgent
+    from core.search import SearchResult
+
+    agent = ResearchAgent.__new__(ResearchAgent)
+    agent.retrieved_urls = set()
+    agent.config = SimpleNamespace(max_searches=5, max_chars_per_call=100_000)
+    agent._search_calls = 0
+    agent._progress = lambda _e: None
+    agent.search = SimpleNamespace(
+        search=lambda queries, objective="": [
+            SearchResult(
+                title="Aggregator roundup",
+                url="https://news.example/roundup",
+                excerpts=["详见 https://www.infoworld.com/article/4221163/x.html"],
+            )
+        ]
+    )
+
+    rendered = agent._tool_search_web({"queries": ["ai agents"]})
+    assert "infoworld.com/article/4221163" in rendered, "the snippet should reach the model"
+    assert "https://www.infoworld.com/article/4221163/x.html" in agent.retrieved_urls
+    assert "https://news.example/roundup" in agent.retrieved_urls
+
+
+def test_a_url_only_in_a_truncated_snippet_is_not_credited(monkeypatch):
+    """The model never saw past the truncation, so neither did the run."""
+    from core.research import ResearchAgent
+    from core.search import SearchResult
+
+    agent = ResearchAgent.__new__(ResearchAgent)
+    agent.retrieved_urls = set()
+    # A limit small enough to cut the excerpt off entirely.
+    agent.config = SimpleNamespace(max_searches=5, max_chars_per_call=60)
+    agent._search_calls = 0
+    agent._progress = lambda _e: None
+    agent.search = SimpleNamespace(
+        search=lambda queries, objective="": [
+            SearchResult(
+                title="T",
+                url="https://news.example/a",
+                excerpts=["x" * 200 + " https://cut.example/b"],
+            )
+        ]
+    )
+
+    rendered = agent._tool_search_web({"queries": ["q"]})
+    assert "cut.example" not in rendered
+    assert "https://cut.example/b" not in agent.retrieved_urls
 
 
 # --- output validation -------------------------------------------------------
