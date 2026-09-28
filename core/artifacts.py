@@ -209,6 +209,29 @@ def _map_row(row: dict, warnings: list[str], context: str) -> dict:
     return mapped
 
 
+def _clean_cell(text: str) -> str:
+    """Strip presentation markup out of a value that is supposed to be data.
+
+    The model writes these fields as prose, so emphasis and code spans come
+    along: 40 of 120 fields in the 2026-09-26 round carried ``**bold**`` and 5
+    carried backticks. ``priority`` came through as ``**P0**``, which the UI
+    then failed to style -- every top-priority action rendered in the muted
+    grey of a P2, because the lookup is an exact match on "P0".
+
+    Only markers that actually occur are handled: paired ``**``/``__`` and code
+    spans. Single ``*`` and ``_`` are left alone on purpose, since they collide
+    with arithmetic and snake_case far more often than they turn up as italics.
+    """
+    if not text:
+        return text
+    cleaned = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    cleaned = re.sub(r"__(.+?)__", r"\1", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+    # Removing a bold run can leave the punctuation it wrapped stranded.
+    cleaned = re.sub(r"^[\s：:，,、；;]+", "", cleaned)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 def canonicalize_rows(rows: list, primary: str, warnings: list[str],
                       context: str) -> list[dict]:
     """Validate and normalize item rows, keeping only usable ones.
@@ -221,7 +244,7 @@ def canonicalize_rows(rows: list, primary: str, warnings: list[str],
         if not isinstance(raw, dict):
             warnings.append(f"{context}: 忽略非对象条目 {type(raw).__name__}")
             continue
-        row = {k: str(v).strip() for k, v in raw.items() if v is not None}
+        row = {k: _clean_cell(str(v)) for k, v in raw.items() if v is not None}
         if not row.get(primary):
             alias = _canonical_header(primary)
             for key, value in row.items():

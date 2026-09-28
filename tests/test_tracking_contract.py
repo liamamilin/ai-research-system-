@@ -76,7 +76,10 @@ def test_parse_maps_drifted_chinese_headers():
     parsed = artifacts.parse_watchlist(text)
     assert len(parsed["items"]) == 1
     item = parsed["items"][0]
-    assert item["topic"].startswith("**DigitalOcean")
+    # The value came from the 观察项 column, and the ** the model wrapped it in
+    # is presentation rather than data, so it is not part of the topic.
+    assert item["topic"].startswith("DigitalOcean")
+    assert "**" not in item["topic"]
     assert "SLA" in item["watch_rationale"]
     assert "Q1 复审" in item["trigger"]
     assert parsed["warnings"] == []

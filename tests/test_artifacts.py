@@ -159,6 +159,59 @@ def test_a_genuinely_empty_watchlist_is_left_alone(tmp_path):
     assert "重新解析" not in " ".join(payloads["watchlist"]["warnings"])
 
 
+def test_markdown_presentation_is_stripped_from_structured_fields():
+    """These fields are data, not prose to be rendered.
+
+    40 of 120 fields in the 2026-09-26 round carried `**bold**` and 5 carried
+    backticks. `priority` arrived as `**P0**`, and the UI styles priority by an
+    exact match on "P0" -- so all 23 top-priority actions rendered in the muted
+    grey of a P2. That is the one signal on the panel that must not lie.
+    """
+    listed = """# 报告
+
+## 2. Immediate Actions
+
+| action | priority |
+|---|---|
+| **A1. 冻结 prompt 前缀**：`cache` 命中率决定成本 | **P0** |
+| A2. 成本模型改三维 | P1 |
+
+## 3. Test This Week
+
+| test | priority |
+|---|---|
+| **T1. 缓存命中率基准**：同任务跑 5 次 | **P0** |
+"""
+    parsed = artifacts.parse_action_items(listed)
+    assert parsed["warnings"] == [], parsed["warnings"]
+
+    priorities = {a["priority"] for a in parsed["actions"]} | {
+        t["priority"] for t in parsed["tests"]}
+    assert priorities == {"P0", "P1"}, priorities
+    assert "**" not in json.dumps(parsed, ensure_ascii=False)
+
+    first = parsed["actions"][0]
+    assert first["action"].startswith("A1. 冻结 prompt 前缀")
+    assert "cache" in first["action"] and "`" not in first["action"]
+
+
+def test_underscore_emphasis_is_stripped_but_snake_case_is_not():
+    """"__x__" is emphasis; "max_rounds" is a variable name."""
+    from core.artifacts import _clean_cell
+
+    assert _clean_cell("__重点__：见 max_rounds 与 token_budget") == \
+        "重点：见 max_rounds 与 token_budget"
+
+
+def test_lone_asterisks_are_left_alone():
+    """A single * is arithmetic far more often than italics, and stripping it
+    would corrupt values like "3* 和 5* 的模型"."""
+    from core.artifacts import _clean_cell
+
+    assert _clean_cell("3* 模型") == "3* 模型"
+    assert _clean_cell("a * b") == "a * b"
+
+
 def test_extract_sources_dedupes_and_strips_punctuation():
     text = (
         "见 https://a.test/x）以及 https://a.test/x ，"
