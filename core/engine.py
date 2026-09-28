@@ -36,7 +36,8 @@ class ResearchEngine:
                  progress_cb=None, workspace_dir: Optional[str] = None,
                  date_override: Optional[str] = None,
                  user: Optional[str] = None,
-                 prompt_vars: Optional[dict] = None):
+                 prompt_vars: Optional[dict] = None,
+                 timeout_override: Optional[int] = None):
         self.config_dir = config_dir
         self.jobs_dir = jobs_dir
         self.sys = load_system_config(config_dir)
@@ -44,6 +45,13 @@ class ResearchEngine:
         self._progress = progress_cb or (lambda _: None)
         self.workspace_dir = os.path.abspath(workspace_dir or os.getcwd())
         self._date_override = date_override
+        # An explicit limit from the caller (run.py --timeout) outranks both
+        # the job's runtime.timeout_seconds and system.yaml. Mutating self.sys
+        # instead did nothing at all: the config was already loaded above, and
+        # 25 of 37 jobs carry their own timeout_seconds, so the flag was
+        # ignored twice over while appearing to be accepted.
+        self._timeout_override = (
+            int(timeout_override) if timeout_override else None)
         self.user = user or ""
         # Extra {placeholder} values supplied by the caller. The synthesis
         # stages use this to receive the upstream reports they are meant to
@@ -100,8 +108,11 @@ class ResearchEngine:
 
         # --- Lock: prevent concurrent execution ---
         runtime_cfg = job.get("runtime", {})
-        timeout = runtime_cfg.get("timeout_seconds",
-                                  self.sys.get("ai", {}).get("timeout", 1800))
+        if self._timeout_override:
+            timeout = self._timeout_override
+        else:
+            timeout = runtime_cfg.get("timeout_seconds",
+                                      self.sys.get("ai", {}).get("timeout", 1800))
         stale_after = timeout + 300  # 5 min buffer for crash recovery
 
         start_time = time.time()

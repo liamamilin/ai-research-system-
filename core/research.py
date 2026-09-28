@@ -71,12 +71,6 @@ _REFUSAL_MARKERS = (
 )
 # A report is expected to have at least one Markdown heading.
 _HEADING_RE = re.compile(r"^#{1,6}\s+\S", re.MULTILINE)
-# Stops at whitespace, ASCII punctuation and CJK punctuation. Without the CJK
-# class a Chinese sentence yielded "https://x.com/a。参考" as one "URL", which
-# then never matched anything the provenance check had actually retrieved.
-_URL_RE = re.compile(
-    r"https?://[^\s<>()\[\]{}\"'`\\^|，。、；：？！…—～«»“”‘’　]+"
-)
 
 
 def report_problem(content: str, tools_used: int = 0,
@@ -131,9 +125,20 @@ def is_sensitive_path(path: str, workspace: str) -> bool:
 # Kept as a module-level alias so the tool methods read cleanly.
 _is_sensitive_path = is_sensitive_path
 
+from . import provenance
 from .errors import CancelledError, LLMError, LLMUnsupportedError
 from .llm import LLMClient, LLMConfig
 from .search import SearchClient, SearchConfig, SearchResult
+
+# One URL pattern, shared with the citation check. Two copies had drifted: the
+# research one excluded "。" but not "（", and the provenance one excluded "）"
+# but not "（", so a citation written the natural Chinese way --
+#   https://host/path（2026-09-22 发布）
+# was extracted with its own annotation glued on and could never match anything
+# the run had retrieved. On the 2026-09-28 round that swallowed 24 of P6's 54
+# citations, which is why the infrastructure radar measured 56% while every
+# stage that did not use that style measured 86-100%.
+_URL_RE = provenance.URL_RE
 
 logger = logging.getLogger(__name__)
 

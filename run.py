@@ -173,8 +173,6 @@ def main():
 
     log_level = "DEBUG" if args.verbose else "INFO"
     sys_cfg = load_system_config(args.config_dir)
-    if args.timeout:
-        sys_cfg.setdefault("ai", {})["timeout"] = args.timeout
     log_cfg = sys_cfg.get("logging", {})
     setup_logger(
         log_file=log_cfg.get("file", "logs/ai_research.log"),
@@ -255,7 +253,7 @@ def main():
     # one bucket literally named "unknown".
     cli_user = args.round_trigger or os.environ.get("AREC_ROUND_TRIGGER") or "cli"
     engine = ResearchEngine(config_dir=args.config_dir, jobs_dir=args.jobs_dir,
-                            user=cli_user)
+                            user=cli_user, timeout_override=args.timeout)
 
     if args.list:
         print_jobs(args.jobs_dir, enabled_only=False)

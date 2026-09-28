@@ -105,6 +105,37 @@ def test_the_watchlist_columns_the_prompt_asks_for_are_all_known():
     assert item["evidence"] == "https://a.test/leak"
 
 
+def test_a_chinese_annotation_does_not_become_part_of_the_url():
+    """`https://host/path（2026-09-22 发布）` is one citation, not one plus junk.
+
+    The extractor excluded the full-width closing bracket but not the opening
+    one, so the annotation was swallowed and the citation could never match
+    anything the run had retrieved. On the 2026-09-28 round that turned 12 of
+    P6's 21 "fabricated" URLs into phantoms and held the infrastructure radar
+    at 56% coverage, below the 60% gate, while stages that never used that
+    citation style sat at 86-100%.
+    """
+    from core.provenance import extract_urls
+
+    assert extract_urls("见 https://x.test/a（2026-09-22 发布）。") == \
+        ["https://x.test/a"]
+    assert extract_urls("https://x.test/b（公告发布）") == ["https://x.test/b"]
+    assert extract_urls("https://x.test/c（未标注）") == ["https://x.test/c"]
+
+
+def test_both_url_patterns_are_the_same_pattern():
+    """Two copies had drifted, each missing a bracket the other had.
+
+    The agent's pattern and the citation check's pattern must be one, or a URL
+    the agent remembered and the same URL the report cites can be spelled
+    differently and fail to match.
+    """
+    from core import provenance
+    from core.research import _URL_RE
+
+    assert _URL_RE is provenance.URL_RE
+
+
 def test_a_watchlist_written_as_a_list_is_still_read():
     """The one section with no `Table:` spec got written as a list.
 

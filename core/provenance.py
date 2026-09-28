@@ -14,7 +14,11 @@ import urllib.request
 from typing import Iterable, Optional
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
-URL_RE = re.compile(r"https?://[^\s<>()\[\]\"'，。；：、）】》]+", re.IGNORECASE)
+URL_RE = re.compile(
+    r"https?://[^\s<>()\[\]{}\"'`\\^|，。、；：？！…—～"
+    r"（）「」『』【】《》〈〉“”‘’　]+",
+    re.IGNORECASE,
+)
 TRAILING = ".,;:!?、，。；：）】》"
 
 TRACKING_PARAMS = {
