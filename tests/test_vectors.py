@@ -196,3 +196,25 @@ def test_overfetch_lets_a_fresher_report_be_recalled(db):
     # Overfetch widens the candidate pool, not the answer: both still return
     # exactly `limit` hits.
     assert len(deep) == len(shallow) == 6
+
+
+def test_a_size_no_larger_than_the_overlap_still_terminates():
+    """The splitter advances by `size - overlap`, so a zero or negative step
+    never shrinks the paragraph: the loop appended chunks forever until the
+    process was killed for memory. Found by a test that passed size=200 while
+    the default overlap is also 200.
+    """
+    text = "长段落内容。" * 100
+    chunks = vectors.chunk_text(text, size=200, overlap=200)
+    assert chunks, "nothing came back"
+    assert all(len(c) <= 200 + 2 for c in chunks), \
+        f"a chunk ran past the requested size: {max(len(c) for c in chunks)}"
+    # And the content survives.
+    assert text[:50].replace("\n", "") in "".join(chunks).replace("\n", "")
+
+
+def test_an_oversized_overlap_is_clamped_rather_than_hanging():
+    text = "内容。" * 500
+    for size, overlap in ((100, 500), (10, 10), (1, 1)):
+        chunks = vectors.chunk_text(text, size=size, overlap=overlap)
+        assert chunks, f"no chunks for size={size} overlap={overlap}"

@@ -32,6 +32,35 @@ def format_citations(hits: list[dict]) -> list[dict]:
     return citations
 
 
+def stage_legend(hits: list[dict]) -> str:
+    """Map the pipeline's stage numbers to the files the user is being shown.
+
+    People ask about "P7" and "P9" because that is how the pipeline names its
+    stages, and the number prefix of each report is the only place that mapping
+    exists -- the reports themselves never say "P9". Asked for P9's immediate
+    actions, the model was handed the right table, could not tell which file it
+    came from, and said so: "无法确认 P9 指代什么".
+
+    Built from the paths actually retrieved, so it cannot drift from the corpus
+    and it does not pad the prompt with stages nobody asked about.
+    """
+    pairs: dict[str, str] = {}
+    for hit in hits:
+        name = (hit.get("path") or "").rsplit("/", 1)[-1]
+        if not name or "_" not in name:
+            continue
+        number, _, rest = name.partition("_")
+        if not number.isdigit() or not rest:
+            continue
+        label = rest[:-3] if rest.endswith(".md") else rest
+        if label and number not in pairs:
+            pairs[number] = label
+    if not pairs:
+        return ""
+    listed = "，".join(f"P{int(n)}={pairs[n]}" for n in sorted(pairs, key=int))
+    return f"阶段编号对应：{listed}。"
+
+
 def build_messages(question: str, hits: list[dict]) -> list[dict]:
     """Build chat messages with numbered context chunks."""
     parts: list[str] = []
@@ -52,8 +81,12 @@ def build_messages(question: str, hits: list[dict]) -> list[dict]:
         used += len(block)
 
     context = "\n\n".join(parts) if parts else "（没有检索到相关资料）"
+    system = _SYSTEM
+    legend = stage_legend(hits)
+    if legend:
+        system = f"{_SYSTEM}\n\n{legend}"
     return [
-        {"role": "system", "content": _SYSTEM},
+        {"role": "system", "content": system},
         {"role": "user", "content": f"资料片段：\n\n{context}\n\n问题：{question}"},
     ]
 

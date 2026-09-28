@@ -107,6 +107,30 @@ Note that a recorded citation count is written once, at run time. If the URL
 extractor changes later, past rounds keep the old figure -- the checker reports
 that as stale rather than pretending the number is current.
 
+## After changing retrieval: measure it
+
+Retrieval quality is not reviewable by reading the diff, and asking the model
+whether it got what it needed costs an LLM call per sample and answers a
+different question. `scripts/eval_retrieval.py` is the cheap objective version:
+a question, a phrase that only appears in the passage that should answer it,
+and the round that passage belongs to.
+
+```bash
+python scripts/eval_retrieval.py            # 15 questions against the newest round
+python scripts/eval_retrieval.py --verbose  # also print what was recalled
+```
+
+It scores two things, and the second is the one that catches the real failure:
+the answering passage may be absent, or it may be present while the results are
+padded with older rounds discussing the same subject. Before trusting a score,
+read the marker check -- it refuses to report if a gold phrase is not in the
+index, because a marker the reports do not contain measures nothing.
+
+This measures retrieval only, and strictly: it wants the exact section, so a
+neighbouring passage that would have answered the question still counts as a
+miss. When changing ranking, read the difference in this number and, for a
+handful of questions, the answer the model actually produces.
+
 ## Adding a Job
 
 Create a YAML file in the appropriate `jobs/` subdirectory (or copy from `jobs/_templates/`):

@@ -261,3 +261,98 @@ def test_qa_records_usage_for_the_budget(client, indexed, monkeypatch):
     assert rows[-1]["job_name"] == "__qa__"
     assert rows[-1]["user"] == "viewer"
     assert rows[-1]["usage"]["total_tokens"] == 42
+
+
+# --- What the model actually receives -------------------------------------
+#
+# Two defects made the model say "资料不足" while the passage was in hand, and
+# both were invisible from the outside: the excerpt was cut at 300 characters,
+# and nothing told it which file was P7.
+
+
+@pytest.fixture()
+def chunked_db(tmp_path, monkeypatch):
+    """A chunk store with no reports in it, for excerpt-shape questions."""
+    monkeypatch.setattr(index_db, "_DB_PATH_OVERRIDE", str(tmp_path / "reports.db"))
+    index_db.init_db()
+    vectors.init_vectors()
+    return tmp_path
+
+
+def _embed(texts):
+    return [[1.0, 0.0] for _ in texts]
+
+
+def test_an_excerpt_is_the_whole_chunk_not_its_first_300_characters(chunked_db):
+    """An excerpt used to be cut at 300 characters.
+
+    These reports open with an executive summary, so a section heading used to
+    land near the *end* of its chunk -- `## 1. 最佳内容机会` at offset 350 of
+    429, `## 6. Test Candidates` at 1038 of 1053 -- and the window cut the
+    excerpt off exactly where the answer began. That is what the model kept
+    reporting as truncated material. core.qa reserves 12000 chars of context and
+    was being handed 6 x 300.
+    """
+    body = "分析基准日：2026-09-28。\n\n" + ("背景说明。" * 200)
+    vectors.index_report("a.md", body, _embed, model="m")
+
+    with index_db.connect() as conn:
+        rows = conn.execute(
+            "SELECT content FROM report_chunks WHERE path = 'a.md'").fetchall()
+    stored = [r["content"] for r in rows]
+    assert any(len(c) > 300 for c in stored), \
+        "test needs a chunk longer than the old 300-character cap"
+
+    for hit in vectors.semantic_search([1.0, 0.0], limit=len(stored)):
+        assert hit["snippet"] in stored, \
+            "an excerpt was handed to the model short of its chunk"
+
+
+def test_the_excerpt_can_still_fit_the_prompt_budget(chunked_db):
+    vectors.index_report("a.md", "内容。" * 400, _embed, model="m")
+    snippet = vectors.semantic_search([1.0, 0.0], limit=1)[0]["snippet"]
+    assert len(snippet) <= qa._MAX_CONTEXT_CHARS / 2, \
+        "one hit now consumes the whole prompt budget"
+
+
+def test_the_stage_number_is_explained_to_the_model():
+    """People ask about P7 and P9 because that is how the pipeline names its
+    stages. The reports never say "P9"; the number prefix of the filename is the
+    only record of the mapping. Without it the model was handed the right table,
+    could not tell which file it came from, and replied "无法确认 P9 指代什么".
+    """
+    hits = [
+        {"path": "p/2026-09-28/07_product_content_opportunities.md"},
+        {"path": "p/2026-09-28/09_executive_synthesis_and_actions.md"},
+    ]
+    legend = qa.stage_legend(hits)
+    assert "P7=product_content_opportunities" in legend
+    assert "P9=executive_synthesis_and_actions" in legend
+
+
+def test_the_legend_covers_only_the_stages_actually_retrieved():
+    legend = qa.stage_legend([{"path": "p/2026-09-28/08_risk_and_alternatives.md"}])
+    assert "P8=risk_and_alternatives" in legend
+    assert "P7" not in legend, "prompt padded with stages nobody asked about"
+
+
+def test_files_without_a_stage_number_are_skipped():
+    """The research job writes one file per run, named for the day."""
+    legend = qa.stage_legend([{"path": "research/2026-09-26_AI.md"},
+                              {"path": "x/no_number.md"}])
+    assert legend == ""
+
+
+def test_the_legend_reaches_the_system_prompt():
+    messages = qa.build_messages("P9 的立即行动有哪些？", [
+        {"path": "p/2026-09-28/09_executive_synthesis_and_actions.md",
+         "snippet": "行动表", "report_date": "2026-09-28"},
+    ])
+    assert "P9=executive_synthesis_and_actions" in messages[0]["content"]
+
+
+def test_no_legend_no_extra_prompt():
+    messages = qa.build_messages("最近有什么风险？", [
+        {"path": "research/2026-09-26_AI.md", "snippet": "内容", "report_date": ""},
+    ])
+    assert messages[0]["content"] == qa._SYSTEM

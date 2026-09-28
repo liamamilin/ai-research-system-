@@ -18,35 +18,110 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1200
 CHUNK_OVERLAP = 200
 
+# What a retrieval hit carries as its snippet. It used to be 300, which is not a
+# size anyone chose on purpose -- it is simply where a chunk stops being short.
+# These reports open with a long executive summary, so a section heading lands
+# near the *end* of its chunk: `## 1. 最佳内容机会` sits at offset 350 of 429,
+# `## 6. Test Candidates` at 1038 of 1053. A 300-char window therefore cut the
+# excerpt off exactly where the answer began, which is why the model kept
+# reporting that the material was truncated. It also wasted most of the prompt
+# budget: `core.qa` reserves 12000 chars and was being handed 6 x 300.
+#
+# `chunk_text` bounds a chunk at `size` plus at most one heading it carried
+# down, so this is a ceiling that should never be reached rather than a trim.
+SNIPPET_CHARS = CHUNK_SIZE * 2
+
 EmbedFn = Callable[[list[str]], list[list[float]]]
+
+
+_HEADING = re.compile(r"^#{1,6}\s")
 
 
 def chunk_text(text: str, size: int = CHUNK_SIZE,
                overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Split text into paragraph-aware chunks of ~``size`` characters."""
-    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text or "") if p.strip()]
-    chunks: list[str] = []
-    current = ""
+    """Split text into paragraph-aware chunks of ~``size`` characters.
 
-    def flush():
+    A heading is never left at the end of a chunk. Filling greedily to ``size``
+    used to be able to end a chunk on its heading, which separated a section
+    from its body: the excerpt the model received stopped at
+    "## 2. Immediate Actions" and the actions sat in the next chunk, so the
+    model reported the section title with nothing under it.
+
+    The opposite mistake is worse, and it was the first attempt at this fix.
+    Forcing every heading to *open* a chunk looked right until these reports'
+    shape was measured: a heading here is followed by a table of several
+    thousand characters, which the splitter cuts, so a naive "start at each
+    heading" emitted 93 bare-heading chunks out of 395 -- 12 characters of
+    title and nothing else. Four of the six hits for a question about model
+    routing were exactly that, and answerability fell from 12 of 15 questions
+    to 7. So the rule is only the negative one: do not strand a heading.
+    """
+    # The splitter advances by `size - overlap`. With the defaults that is
+    # comfortably positive, but any caller passing a size no larger than the
+    # overlap gets a step of zero, the paragraph never shrinks, and the loop
+    # appends forever until the process is killed for memory. Clamp instead.
+    if overlap >= size:
+        overlap = max(0, size // 2)
+
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", text or "") if p.strip()]
+
+    # A heading directly under another heading is one structural unit, and the
+    # text that follows belongs to both. Kept apart, the pair is torn across a
+    # chunk boundary: one report came out with `## 1. High-Signal Model Updates`
+    # as a chunk containing nothing else, and its sub-sections unreachable as
+    # separate results.
+    units: list[str] = []
+    for para in paragraphs:
+        if units and _HEADING.match(para) and _HEADING.match(units[-1]):
+            units[-1] = f"{units[-1]}\n\n{para}"
+        else:
+            units.append(para)
+    paragraphs = units
+
+    chunks: list[str] = []
+    current: list[str] = []
+
+    def measure(items: list[str]) -> int:
+        return sum(len(p) for p in items) + 2 * (len(items) - 1) if items else 0
+
+    def flush() -> None:
         nonlocal current
         if current:
-            chunks.append(current)
-            current = ""
+            chunks.append("\n\n".join(current))
+            current = []
 
     for para in paragraphs:
         while len(para) > size:
             piece, para = para[:size], para[size - overlap:]
-            if current:
-                flush()
+            if len(current) == 1 and _HEADING.match(current[0]):
+                # A lone heading plus the first slice of what it introduces.
+                # Cutting here without this leaves 12 characters of title as
+                # the whole chunk, which matches a question about the section
+                # perfectly and answers nothing.
+                room = size - len(current[0]) - 2
+                if room > 0:
+                    opening, piece = piece[:room], piece[room:]
+                    current = current + [opening]
+            flush()
             chunks.append(piece)
         if not current:
-            current = para
-        elif len(current) + len(para) + 2 <= size:
-            current = f"{current}\n\n{para}"
+            current = [para]
+        elif measure(current) + 2 + len(para) <= size:
+            current.append(para)
         else:
+            # A heading that ends a chunk belongs with the paragraph it
+            # introduces, so it moves down to the next one -- but only one, and
+            # only if something would be left behind. These reports nest
+            # `###` sub-headings directly under each other, and a loop that
+            # pulled down every trailing heading consumed the whole chunk
+            # instead of flushing it: one report came out as a single 10041
+            # character chunk, and the sub-sections inside it were unreachable
+            # as separate results.
+            moved: list[str] = []
+            if current and _HEADING.match(current[-1]):
+                moved.append(current.pop())
             flush()
-            current = para
+            current = moved + [para]
     flush()
     return chunks
 
@@ -156,7 +231,7 @@ def semantic_search(query_vector: list[float], limit: int = 8) -> list[dict]:
         {
             "path": row["path"],
             "chunk_index": row["chunk_index"],
-            "snippet": row["content"][:300],
+            "snippet": row["content"][:SNIPPET_CHARS],
             "score": _cosine(query_vector, _decode(row["embedding"])),
             "source": "vector",
         }
@@ -328,15 +403,22 @@ def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 
             "source": "hybrid" if chunk else "fts",
         }
 
-    per_path: dict[str, int] = {}
+    # Every chunk becomes a candidate. An earlier version stopped adding a
+    # report's chunks after the first two, which meant the shortlist was decided
+    # before anything was ranked. It happened to be inert -- chunk hits arrive
+    # in cosine order and share a report's date, so the passages it dropped were
+    # already below that report's first two -- but it was deciding what was
+    # eligible, and only the downstream cap kept it invisible. The cap is now
+    # applied once, to the ranked list, where it belongs.
     for hit in chunk_hits:
         key = (hit["path"], hit.get("chunk_index"))
         if key in merged:
-            per_path[hit["path"]] = per_path.get(hit["path"], 0) + 1
             continue
-        if per_path.get(hit["path"], 0) >= max_chunks_per_report:
-            continue
-        entry = {
+        # No "fts_score" key at all: _fts_relevance reads an absent key as
+        # "no keyword relevance" (0.0) and an explicit None as a LIKE hit with
+        # no BM25 (1.0). Setting it to None would credit a vector-only
+        # candidate with a perfect keyword score it never earned.
+        merged[key] = {
             "path": hit["path"],
             "title": "",
             "snippet": hit["snippet"],
@@ -344,12 +426,6 @@ def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 
             "chunk_index": hit.get("chunk_index"),
             "source": "vector",
         }
-        # No "fts_score" key at all: _fts_relevance reads an absent key as
-        # "no keyword relevance" (0.0) and an explicit None as a LIKE hit with
-        # no BM25 (1.0). Setting it to None would credit a vector-only
-        # candidate with a perfect keyword score it never earned.
-        merged[key] = entry
-        per_path[hit["path"]] = per_path.get(hit["path"], 0) + 1
 
     ranked = list(merged.values())
     dates = report_dates(hit["path"] for hit in ranked)
