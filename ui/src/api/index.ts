@@ -304,6 +304,30 @@ export async function getSharedReport(token: string): Promise<SharedReport> {
   return api(`/api/share/${encodeURIComponent(token)}`);
 }
 
+// --- Share links ------------------------------------------------------------
+
+export interface ShareLink {
+  jti: string;
+  path: string;
+  by: string;
+  created_at: number;
+  expires_at: number;
+  revoked_at: number | null;
+  expired: boolean;
+  /** live | expired | revoked */
+  state: "live" | "expired" | "revoked";
+}
+
+export async function listShareLinks(includeExpired = false): Promise<{ links: ShareLink[] }> {
+  return api("/api/reports/shares", {
+    query: includeExpired ? { include_expired: "true" } : undefined,
+  });
+}
+
+export async function revokeShareLink(jti: string): Promise<{ ok: boolean; revoked: boolean }> {
+  return api(`/api/reports/shares/${encodeURIComponent(jti)}/revoke`, { method: "POST" });
+}
+
 type TreeQuery = {
   category?: string;
   job?: string;

@@ -317,18 +317,47 @@ def create_share(payload: dict, request: Request, user=Depends(require_editor)):
     safe = os.path.normpath(path).lstrip("/")
     resolve_output_file(safe, allowed_exts=(".md", ".mdx"))
 
-    token, expires_at = share_mod.create_share_token(
+    token, expires_at, jti = share_mod.create_share_token(
         safe, ttl_hours=ttl_hours, created_by=user["username"])
     audit.log(
         "report_share",
         user=user["username"],
         target=safe,
         result="success",
-        details={"expires_at": expires_at},
+        details={"expires_at": expires_at, "jti": jti},
         ip=request.client.host if request.client else None,
     )
-    return {"token": token, "path": safe, "expires_at": expires_at,
+    return {"token": token, "path": safe, "expires_at": expires_at, "jti": jti,
             "url": f"/share/{token}"}
+
+
+@router.get("/shares")
+def list_shares(include_expired: bool = False, user=Depends(require_editor)):
+    """Every share link this console has issued, and whether it still works.
+
+    A link handed to somebody cannot be un-handed without this: it is a
+    self-contained token, so rotating the app secret is the only other way to
+    kill it, and that signs you out and invalidates every other link too.
+    """
+    from web import share as share_mod
+
+    return {"links": share_mod.list_links(include_expired=include_expired)}
+
+
+@router.post("/shares/{jti}/revoke")
+def revoke_share(jti: str, request: Request, user=Depends(require_editor)):
+    """Withdraw one share link. Idempotent."""
+    from web import share as share_mod
+
+    changed = share_mod.revoke(jti)
+    audit.log(
+        "report_share_revoke",
+        user=user["username"],
+        target=jti,
+        result="success" if changed else "not_found",
+        ip=request.client.host if request.client else None,
+    )
+    return {"ok": True, "jti": jti, "revoked": changed}
 
 
 @router.get("/html")

@@ -73,7 +73,7 @@ def test_invalid_and_expired_tokens(client, report, app):
     anon = TestClient(app)
     assert anon.get("/api/share/not-a-token").status_code == 401
 
-    expired, _ = share_mod.create_share_token(report, ttl_hours=1)
+    expired, _expires_at, _jti = share_mod.create_share_token(report, ttl_hours=1)
     payload = share_mod.verify_share_token(expired)
     assert payload is not None
 

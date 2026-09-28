@@ -6,6 +6,7 @@ import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
 import { Trash2, RefreshCw, Copy, Check } from "lucide-react";
 import { SystemConfig } from "@/components/SystemConfig";
+import { ShareLinks } from "@/components/ShareLinks";
 
 type SettingsTab = "system" | "users" | "audit" | "logs";
 
@@ -61,6 +62,11 @@ export function SettingsPage() {
           control, so it should be findable without competing with the tab
           content for attention. */}
       <AccessCard />
+
+      {/* Exposure has a lifecycle -- a link outlives the conversation it was
+          made for, and used to have no way back. Same reasoning: an admin
+          surface, below the fold, not competing with the tab content. */}
+      <ShareLinks />
     </div>
   );
 }
