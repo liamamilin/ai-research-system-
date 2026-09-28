@@ -67,6 +67,7 @@
 ## Validation Evidence
 
 - `bash scripts/check.sh`：backend 191 passed，frontend 19 passed，tsc/eslint/vite build 全绿
+  - 注（2026-09-28）：以上为本报告的存档数据，按原样保留。测试套件此后已大幅扩充，当日门禁为后端 876 / 前端 176；以 `bash scripts/check.sh` 的输出为准。
 - 新增测试文件：tracking, tracking_api, artifacts(diff), reports_meta, reports_api, share, render, digest, sources, embeddings, vectors, qa, backup_script, setup_api
 - 安装/运行：pip + npm ok；`run.py --list` 24 jobs；`create_app()` ok
 - 备份：`scripts/backup_state.sh --dry-run` 正确列出 users.db/reports.db 等

@@ -9,7 +9,14 @@ language: "zh"
 schedule:
   type: "manual"
 runtime:
-  timeout_seconds: 300
+  # Was 300, and the 2026-09-28 round finished in 299.7s -- 99.9% of it. The
+  # search limits were doubled (max_searches 12 -> 20, max_results 10 -> 20)
+  # and P0 runs 15 of those searches, so the next round would have timed out.
+  # Every other stage uses 3-20% of its own limit; this was the only one in
+  # danger. 900s leaves room for the full search budget plus variance while
+  # staying well under the 1800 the radars get -- a planner should not be able
+  # to eat a round.
+  timeout_seconds: 900
   skip_if_running: true
 prompt: |
   重要：请用中文输出完整报告。所有章节标题、表格、分析结论都必须使用中文。

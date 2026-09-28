@@ -81,6 +81,7 @@
   - Evidence: backend 191 passed, frontend 19 passed, tsc/eslint/vite build clean
   - Validation: `bash scripts/check.sh`
   - Status: passed
+  - Note (2026-09-28): 上述数字是本文档自身的存档记录，按原样保留 —— 改写它会让这份验收记录声称一次从未发生过的运行。测试套件此后已大幅扩充；当前总数请以 `bash scripts/check.sh` 的输出为准（当日为后端 876 / 前端 176）。
 
 ## Documentation
 - [x] README/ROADMAP 与新能力同步
