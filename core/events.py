@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from typing import Iterable, Optional
 from urllib.parse import unquote, urlparse
 
+from core import sqlite_util
 from core.provenance import extract_urls, normalize_url
 
 DB_FILE = os.path.join("state", "events.db")
@@ -87,16 +88,11 @@ def use_state_dir(state_dir: str) -> None:
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
     path = db_path()
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    try:
+    # Shared PRAGMA setup: busy_timeout plus WAL, so a read racing a write waits
+    # instead of raising "database is locked". Six pipeline stages write here at
+    # once. See core/sqlite_util.py.
+    with sqlite_util.connect(path) as conn:
         yield conn
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def init_db() -> None:
