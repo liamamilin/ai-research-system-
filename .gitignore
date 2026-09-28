@@ -49,3 +49,7 @@ ui/dist/
 .env
 .env.local
 secrets/
+
+# coverage
+.coverage
+htmlcov/
