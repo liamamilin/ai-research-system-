@@ -385,7 +385,7 @@ describe("Scheduler matrix system tasks", () => {
     },
   ];
 
-  function mockSystem(removed: unknown[] = []) {
+  function mockSystem(removed: unknown[] = [], jobs: unknown[] = SYSTEM) {
     const calls: { url: string; init?: RequestInit }[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const path = String(url);
@@ -399,7 +399,7 @@ describe("Scheduler matrix system tasks", () => {
       if (path.includes("/restore")) return jsonResponse({ ok: true, label: DAILY, installed: true });
       if (path.includes("/api/scheduler")) {
         return jsonResponse({
-          jobs: SYSTEM, total: SYSTEM.length, removed_system_jobs: removed,
+          jobs, total: jobs.length, removed_system_jobs: removed,
           dispatcher: { online: true, detail: "执行器在线", age_seconds: 3 },
           health: { jobs: [], overdue: 0, paused: 0, detail: "" },
         });
@@ -471,7 +471,7 @@ describe("Scheduler matrix system tasks", () => {
     const calls = mockSystem([{ label: DAILY, kind: "daily", deleted_at: "20260926_101500", schedule: "0 6 * * *" }]);
     render(<SchedulerPage />);
     expect(await screen.findByText("已删除的系统任务")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /恢复/ }));
+    fireEvent.click(screen.getByRole("button", { name: `恢复 ${DAILY}` }));
     await waitFor(() => expect(calls.some(c => c.url.includes(`${DAILY}/restore`) && c.init?.method === "POST")).toBe(true));
   });
 
@@ -480,5 +480,40 @@ describe("Scheduler matrix system tasks", () => {
     render(<SchedulerPage />);
     await screen.findByRole("button", { name: `编辑 ${DAILY}` });
     expect(screen.queryByText("已删除的系统任务")).toBeNull();
+  });
+
+  it("keeps restore reachable after the last system task is deleted", async () => {
+    // The trap this guards: the restore list used to render inside the
+    // jobs.length > 0 branch, so deleting the last system task removed the only
+    // way to undo it. Two days of reports went missing that way.
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = mockSystem(
+      [{ label: DAILY, kind: "daily", deleted_at: "20260926_213037", schedule: "0 6 * * *", installed: false }],
+      [],
+    );
+    render(<SchedulerPage />);
+
+    // The empty state must not claim nothing was ever configured.
+    expect(await screen.findByText("情报矩阵的系统任务已全部删除")).toBeTruthy();
+    expect(screen.queryByText("创建第一个计划")).toBeNull();
+
+    const restoreBtn = screen.getByRole("button", { name: `恢复 ${DAILY}` });
+    fireEvent.click(restoreBtn);
+    await waitFor(() => expect(calls.some(c => c.url.includes(`${DAILY}/restore`) && c.init?.method === "POST")).toBe(true));
+  });
+
+  it("restores every deleted system task in one click", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const calls = mockSystem([
+      { label: DAILY, kind: "daily", deleted_at: "20260926_213037", schedule: "0 6 * * *", installed: false },
+      { label: CATCHUP, kind: "interval", deleted_at: "20260926_213039", schedule: "*/30 * * * *", installed: false },
+    ], []);
+    render(<SchedulerPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "全部恢复" }));
+    await waitFor(() => {
+      expect(calls.some(c => c.url.includes(`${DAILY}/restore`))).toBe(true);
+      expect(calls.some(c => c.url.includes(`${CATCHUP}/restore`))).toBe(true);
+    });
   });
 });

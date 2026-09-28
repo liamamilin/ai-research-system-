@@ -155,6 +155,57 @@ def test_restoring_something_that_was_never_deleted_is_a_clear_error(admin, syst
     assert '没有找到' in response.json()['error']['message']
 
 
+def _matrix_stages(root, count=3):
+    """Put stage YAMLs where the warning looks for them."""
+    stages = root / "jobs" / "practical_ai_intelligence"
+    stages.mkdir(parents=True, exist_ok=True)
+    for i in range(count):
+        (stages / f"{i:02d}_stage.yaml").write_text("name: x\n", encoding="utf-8")
+    return stages
+
+
+def test_a_deleted_daily_agent_warns_that_the_matrix_stops(admin, system_agents, web_env):
+    # The failure this guards is silence: the stages are ordinary job files, so
+    # a missing trigger raises nothing anywhere and the round just stops.
+    client, root, headers = admin
+    _matrix_stages(root)
+    assert client.get('/api/scheduler').json()['warnings'] == []
+
+    client.delete(f'/api/scheduler/{DAILY}', headers=headers)
+
+    warnings = client.get('/api/scheduler').json()['warnings']
+    assert any('情报矩阵不会自动运行' in w for w in warnings), warnings
+    # The message has to name the way out, not just the problem.
+    joined = ' '.join(warnings)
+    assert DAILY in joined and '恢复' in joined
+
+
+def test_the_warning_names_the_install_script_when_nothing_was_deleted(admin, system_agents, web_env):
+    client, root, headers = admin
+    _matrix_stages(root)
+    # Agents installed but not loaded: not a deletion, so no restore path.
+    system_agents.loaded_labels.discard(DAILY)
+
+    warnings = client.get('/api/scheduler').json()['warnings']
+    joined = ' '.join(warnings)
+    assert '情报矩阵不会自动运行' in joined
+    assert 'install_launchd.sh' in joined
+
+
+def test_no_warning_when_there_is_no_matrix_to_run(admin, system_agents, web_env):
+    client, _, _ = admin
+    # No stage files at all: a checkout without the pipeline should not be
+    # nagged about triggers it never wanted.
+    system_agents.loaded_labels.clear()
+    assert client.get('/api/scheduler').json()['warnings'] == []
+
+
+def test_no_warning_while_the_agents_are_loaded(admin, system_agents, web_env):
+    client, root, _ = admin
+    _matrix_stages(root)
+    assert client.get('/api/scheduler').json()['warnings'] == []
+
+
 def test_restore_is_refused_for_an_ordinary_plan(admin, system_agents):
     client, _, headers = admin
     assert client.post('/api/scheduler/some_cron_job/restore', headers=headers).status_code == 400

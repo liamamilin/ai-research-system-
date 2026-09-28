@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shlex
 import sys
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, StrictBool, StrictStr, StrictInt
@@ -93,9 +94,46 @@ def list_scheduled(user=Depends(require_admin)):
     health['paused'] = sum(s['status'] == 'paused' for s in health['jobs'])
     health['status'] = 'error' if health['overdue'] else 'warn' if warnings else 'ok'
     removed = launchd_agents.list_deleted(get_settings().paths.state_dir)
+    warnings.extend(_matrix_trigger_warnings(displayed, removed))
     return {"jobs": displayed, "total": len(displayed), "health": health,
             "timezone": cron.timezone_label(), "warnings": warnings,
             'dispatcher': host, "removed_system_jobs": removed}
+
+
+def _matrix_trigger_warnings(displayed: list[dict], removed: list[dict]) -> list[str]:
+    """Say it out loud when the matrix stages exist but nothing will run them.
+
+    The stages are ordinary job files, so a missing daily trigger produces no
+    error anywhere -- the round simply stops and the newest report quietly ages.
+    Two days of silence looked like a normal quiet weekend.
+
+    Only fires when the stages are actually present, so a checkout that never
+    installed the agents is not nagged about a pipeline it does not have. Reads
+    ``displayed`` rather than calling launchd again: list_launchd_agents already
+    asked launchctl, and a second call per label would double the page's latency
+    for an answer we are throwing away.
+    """
+    settings = get_settings()
+    stages_dir = Path(settings.paths.jobs_dir) / "practical_ai_intelligence"
+    stages = sorted(stages_dir.glob("*.yaml")) if stages_dir.is_dir() else []
+    if not stages:
+        return []
+    by_label = {job.get("id"): job for job in displayed if job.get("backend") == "launchd"}
+    missing = [
+        label for label in launchd_agents.LABELS
+        if not (by_label.get(label, {}).get("installed") and by_label.get(label, {}).get("loaded"))
+    ]
+    if not missing:
+        return []
+    deleted = {job.get("label") for job in removed}
+    names = "、".join(missing)
+    if any(label in deleted for label in missing):
+        return [f"情报矩阵不会自动运行：系统任务 {names} 已被删除，"
+                f"但 {len(stages)} 个阶段仍在 jobs/practical_ai_intelligence/。"
+                f"日报已停止生成，可在下方「已删除的系统任务」一键恢复。"]
+    return [f"情报矩阵不会自动运行：系统任务 {names} 未安装或未加载，"
+            f"但 {len(stages)} 个阶段仍在 jobs/practical_ai_intelligence/。"
+            f"请运行 bash scripts/install_launchd.sh。"]
 
 
 @router.get("/preview")

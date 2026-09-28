@@ -30,7 +30,7 @@ interface ScheduledJob {
   installed?: boolean;
   loaded?: boolean;
 }
-interface RemovedSystemJob { label: string; kind: string; deleted_at: string; schedule: string }
+interface RemovedSystemJob { label: string; kind: string; deleted_at: string; schedule: string; installed?: boolean }
 interface Dispatcher { online: boolean; detail: string; age_seconds?: number }
 interface SchedulableJob {
   schedule_id?: string;
@@ -301,7 +301,15 @@ export function SchedulerPage() {
     </div>}
 
     {loading ? <p className="text-sm text-text-muted">加载中…</p> : error ? <ErrorState error={error} onRetry={() => fetchJobs()} /> : jobs.length === 0 ? <div className="card p-10 text-center space-y-2">
-      <Clock className="w-8 h-8 mx-auto text-text-muted" /><p className="text-sm font-medium">暂无周期调度任务</p><p className="text-xs text-text-muted">创建计划后，可在这里查看下一次运行和执行状态。</p><button className="btn mt-2" onClick={openNew}>创建第一个计划</button>
+      <Clock className="w-8 h-8 mx-auto text-text-muted" />
+      {/* Deleting the last system task empties this list, so the empty state has
+          to stop claiming nothing was ever set up -- and it must not be the only
+          thing on screen, or the restore controls below have no way back. */}
+      <p className="text-sm font-medium">{removed.length > 0 ? "情报矩阵的系统任务已全部删除" : "暂无周期调度任务"}</p>
+      <p className="text-xs text-text-muted">{removed.length > 0
+        ? "每日情报轮次不会再自动运行。恢复下面的系统任务即可按原频率继续。"
+        : "创建计划后，可在这里查看下一次运行和执行状态。"}</p>
+      <button className="btn mt-2" onClick={openNew}>{removed.length > 0 ? "仍然新建计划" : "创建第一个计划"}</button>
     </div> : <div className="space-y-3">{jobs.map(job => {
       const state = states[job.id];
       const isSystem = job.backend === "launchd";
@@ -333,16 +341,21 @@ export function SchedulerPage() {
           <code className="block whitespace-pre-wrap break-all">{job.command}</code>
         </div></details>}
       </div>;
-    })}{removed.length > 0 && <div className="card border-warning/40 p-4 space-y-3">
+    })}</div>}
+    {/* Outside the jobs list on purpose: this is the only way back from
+        deleting the last system task, so it cannot live inside the branch that
+        an empty list takes. */}
+    {removed.length > 0 && <div className="card border-warning/40 p-4 space-y-3">
       <div className="text-sm"><p className="font-medium">已删除的系统任务</p><p className="text-xs text-text-muted mt-1">情报矩阵不会自动运行，恢复后按删除前的频率继续。</p></div>
       <div className="space-y-2">{removed.map(job => <div key={`${job.label}-${job.deleted_at}`} className="flex flex-wrap items-center gap-2 text-xs">
         <span className="font-mono break-all">{job.label}</span>
         <span className="text-text-muted">{job.schedule || "频率未知"}</span>
         <span className="text-text-muted">· 删除于 {displayTime(job.deleted_at)}</span>
-        <button className="btn text-xs ml-auto" disabled={!!busy} onClick={() => restore(job)}>
+        <button className="btn text-xs ml-auto" disabled={!!busy} aria-label={`恢复 ${job.label}`} onClick={() => restore(job)}>
           {busy === job.label ? "恢复中…" : "恢复"}<RotateCcw className="w-3 h-3" />
         </button>
       </div>)}</div>
-    </div>}</div>}
+      {removed.length > 1 && removed.every(job => !job.installed) && <button className="btn btn-xs" disabled={!!busy} onClick={() => removed.forEach(restore)}>全部恢复</button>}
+    </div>}
   </div>;
 }
