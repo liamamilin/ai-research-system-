@@ -268,7 +268,23 @@ def create_app() -> FastAPI:
     # ----- Static SPA (production) -----
     ui_dist = Path(__file__).resolve().parent.parent / "ui" / "dist"
     if ui_dist.is_dir():
-        app.mount("/assets", StaticFiles(directory=ui_dist / "assets"), name="assets")
+        class HashedAssets(StaticFiles):
+            """Immutable caching for content-hashed filenames.
+
+            Vite puts a content hash in every asset name, so a given URL can
+            never mean two different files. Saying so explicitly stops the
+            browser from revalidating each one on every page load -- and, more
+            importantly, stops it from *heuristically* caching the entry
+            document, which is what left this console running a stale bundle
+            after a rebuild with no error anywhere.
+            """
+
+            def file_response(self, *args, **kwargs):
+                resp = super().file_response(*args, **kwargs)
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                return resp
+
+        app.mount("/assets", HashedAssets(directory=ui_dist / "assets"), name="assets")
 
         @app.get("/{full_path:path}")
         async def spa_fallback(full_path: str):
@@ -280,7 +296,11 @@ def create_app() -> FastAPI:
                 )
             index = ui_dist / "index.html"
             if index.is_file():
-                return FileResponse(index)
+                # no-store, not no-cache: the document names the current asset
+                # hashes, so a cached copy is guaranteed to be the wrong one.
+                return FileResponse(index, headers={
+                    "Cache-Control": "no-store, must-revalidate",
+                })
             return JSONResponse(status_code=404, content=ApiError.make("not_found", "Not found"))
     else:
 
