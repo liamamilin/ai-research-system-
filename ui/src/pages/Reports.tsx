@@ -577,7 +577,20 @@ export function ReportsPage() {
                             )}
                             title={
                               `引用溯源：${item.quality.matched}/${item.quality.total} 来自本次检索` +
-                              (item.quality.unmatched ? `，${item.quality.unmatched} 个未在检索结果中` : "")
+                              (item.quality.unmatched ? `，${item.quality.unmatched} 个未在检索结果中` : "") +
+                              // "Not in this run's results" reads like an accusation.
+                              // When the unmatched ones have been probed, say how
+                              // many actually fail to resolve -- on 2026-09-28, 15
+                              // of 16 were live pages the model already knew.
+                              (item.quality.absent_count != null
+                                ? `；已探测 ${item.quality.probed} 条：${item.quality.absent_count} 条确认不存在` +
+                                  (item.quality.undecidable_count
+                                    ? `，${item.quality.undecidable_count} 条被站点拒绝无法判定`
+                                    : "") +
+                                  (item.quality.absent_examples?.length
+                                    ? ` —— ${item.quality.absent_examples.join("、")}`
+                                    : "")
+                                : "")
                             }
                           >
                             引用 {Math.round((item.quality.coverage ?? 0) * 100)}%

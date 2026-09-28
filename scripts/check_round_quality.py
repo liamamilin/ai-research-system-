@@ -297,11 +297,67 @@ def check_ratios(round_dir: Path, problems: list[str], notes: list[str]) -> None
                 f"明显不足（应约 {share * len(deps)}）")
 
 
+def classify_citations(round_dir: Path, date: str, max_checks: int,
+                       timeout: float) -> list[str]:
+    """Probe each stage's unmatched citations and report what does not resolve.
+
+    "未在本次检索结果中" is not an accusation of fabrication, and on the
+    2026-09-28 round it would have been a wrong one: of the 16 citations the
+    infrastructure radar used that the run never retrieved, 15 resolved with
+    HTTP 200 -- verified against a control path on each host, which 404s, so
+    they are real pages and not soft-404s. The model was citing projects it
+    already knew.
+
+    This answers that question for a round that has already finished, rather
+    than leaving it to a hand-written script.
+    """
+    from core.provenance import extract_urls, probe_with_controls
+
+    notes: list[str] = []
+    for key, path in stage_documents(round_dir).items():
+        # Every stage, not just the synthesis ones: the radars are where the
+        # unmatched citations actually were.
+        # Reconstruct which citations the run could not have retrieved: URLs in
+        # this document that appear in no other document of the round.
+        others: set[str] = set()
+        for other_key, other in stage_documents(round_dir).items():
+            if other_key == key:
+                continue
+            others.update(extract_urls(
+                other.read_text(encoding="utf-8", errors="replace")))
+        own = extract_urls(path.read_text(encoding="utf-8", errors="replace"))
+        unique = [u for u in own if u not in others][:max_checks]
+        if not unique:
+            continue
+        audit = probe_with_controls(unique, timeout=timeout)
+        label = STAGE_LABEL.get(key, key)
+        parts = [f"{label}：{audit['probed']} 条独有引用"]
+        parts.append(f"{audit['reachable_count']} 条可访问（模型凭已有知识引用）")
+        if audit["absent_count"]:
+            parts.append(f"{audit['absent_count']} 条确认不存在")
+        if audit["undecidable_count"]:
+            parts.append(
+                f"{audit['undecidable_count']} 条无法判定（站点对探测一律拒绝）")
+        line = "；".join(parts)
+        if audit["absent"]:
+            line += ("\n      确认不存在（可能是编造，也可能是路径写错）："
+                     + "、".join(audit["absent"][:3]))
+        if audit["undecidable"]:
+            line += ("\n      无法判定（不代表编造）："
+                     + "、".join(f"{d['url']}({d['status']})"
+                                 for d in audit["undecidable"][:2]))
+        notes.append(line)
+    return notes
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="检查一轮情报产物的完整性")
     parser.add_argument("date", nargs="?", help="轮次日期 YYYY-MM-DD（默认最新）")
     parser.add_argument("--output-dir", default=str(ROOT / "output"))
     parser.add_argument("--min-coverage", type=float, default=0.6)
+    parser.add_argument("--classify", action="store_true",
+                        help="探测未匹配引用能否访问，区分「凭记忆引用」与「编造」")
+    parser.add_argument("--classify-timeout", type=float, default=6.0)
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -329,6 +385,11 @@ def main() -> int:
 
     for note in notes:
         print(f"  · {note}")
+    if args.classify:
+        print("\n探测独有引用的可达性…")
+        for line in classify_citations(round_dir, date, max_checks=20,
+                                       timeout=args.classify_timeout):
+            print(f"  · {line}")
     if problems:
         print()
         for problem in problems:

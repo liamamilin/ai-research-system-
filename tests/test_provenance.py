@@ -95,9 +95,14 @@ def test_verify_unreachable_probes_only_unmatched(monkeypatch):
     )
     text = "https://good.test/x https://bad.test/y"
     result = provenance.check(text, ["https://good.test/x"], verify_unreachable=True)
-    assert probed == ["https://bad.test/y"]
+    # Only the unmatched one, plus its site root as a liveness control -- a
+    # status is not evidence on its own.
+    assert "https://bad.test/y" in probed
+    assert "https://bad.test/" in probed
+    assert "https://good.test/" not in probed, "a matched citation was probed"
     assert result["reachability"]["checked"] == 1
     assert result["reachability"]["reachable"] == 1
+    assert result["citation_audit"]["reachable_count"] == 1
 
 
 def test_probe_respects_max_checks(monkeypatch):

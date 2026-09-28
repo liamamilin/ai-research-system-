@@ -24,6 +24,7 @@ def _quality_summary(meta: Optional[dict]) -> Optional[dict]:
     check = (meta or {}).get("citation_check") or {}
     if not check or not check.get("total"):
         return None
+    audit = check.get("citation_audit") or {}
     return {
         "coverage": check.get("coverage"),
         "matched": check.get("matched"),
@@ -31,6 +32,14 @@ def _quality_summary(meta: Optional[dict]) -> Optional[dict]:
         "unmatched": check.get("unmatched"),
         "below_threshold": bool(check.get("below_threshold")),
         "reachable": (check.get("reachability") or {}).get("reachable"),
+        # The only numbers that separate "the model cited something it knows"
+        # from "the model invented a link". `undecidable` is deliberately its
+        # own bucket: a site that answers 403 to a control path cannot exist
+        # tells you nothing about whether the page is real.
+        "probed": audit.get("probed"),
+        "absent_count": audit.get("absent_count"),
+        "absent_examples": (audit.get("absent") or [])[:5],
+        "undecidable_count": audit.get("undecidable_count"),
     }
 
 
