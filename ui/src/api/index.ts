@@ -397,6 +397,10 @@ export interface RoundStage {
 export interface RoundArtifact {
   name: string;
   size: number;
+  /** What the artifact says went wrong while producing it. */
+  warnings?: string[];
+  /** Parsed to zero items -- not the same as a round with nothing to say. */
+  empty?: boolean;
 }
 
 export interface Round {
@@ -406,6 +410,8 @@ export interface Round {
   tokens_total?: number;
   stages: RoundStage[];
   artifacts?: RoundArtifact[];
+  /** Only on the single-round endpoint; re-reads the round's documents. */
+  warnings?: string[];
   live: {
     date: string;
     status: string;
@@ -502,6 +508,10 @@ export async function getRoundDiff(date: string, against?: string): Promise<Roun
   return api(`/api/pipeline/rounds/${encodeURIComponent(date)}/diff`, {
     query: against ? { against } : undefined,
   });
+}
+
+export async function getRound(date: string): Promise<Round> {
+  return api(`/api/pipeline/rounds/${encodeURIComponent(date)}`);
 }
 
 // --- Account / user management ---

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Check, RotateCcw, X, XCircle } from "lucide-react";
+import { AlertTriangle, Check, RotateCcw, X, XCircle } from "lucide-react";
 
 import {
+  getRound,
   getRoundDiff,
   getTrackedItems,
   updateTrackedItem,
@@ -111,6 +112,7 @@ export function RoundDetail({ date, onClose }: { date: string; onClose: () => vo
   const [carry, setCarry] = useState<CarryOver | null>(null);
   const [items, setItems] = useState<TrackedItem[]>([]);
   const [diff, setDiff] = useState<RoundDiff | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const user = useAuthStore((s) => s.user);
@@ -154,12 +156,14 @@ export function RoundDetail({ date, onClose }: { date: string; onClose: () => vo
     Promise.all([
       getTrackedItems({ limit: 1000 }),
       getRoundDiff(date).catch(() => null),
+      getRound(date).catch(() => null),
     ])
-      .then(([tracking, diffData]) => {
+      .then(([tracking, diffData, round]) => {
         if (!alive) return;
         setItems(tracking.items);
         setCarry(tracking.carry_over);
         setDiff(diffData);
+        setWarnings(round?.warnings || []);
       })
       .catch((err: unknown) => {
         if (alive) setError(err instanceof Error ? err.message : "加载失败");
@@ -189,6 +193,21 @@ export function RoundDetail({ date, onClose }: { date: string; onClose: () => vo
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {warnings.length > 0 && (
+          <div className="mx-4 mt-3 card border-warning/50 p-3 text-xs space-y-1">
+            <p className="font-medium flex items-center gap-1.5 text-warning">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              本轮产物有 {warnings.length} 条告警
+            </p>
+            {warnings.map((w) => (
+              <p key={w} className="text-text-muted leading-relaxed">· {w}</p>
+            ))}
+            <p className="text-text-muted leading-relaxed">
+              文档本身可能有内容，只是没能解析成结构化产物；点上方产物按钮可下载原始 JSON 对照。
+            </p>
+          </div>
+        )}
 
         <div className="px-4 pt-2 flex gap-1 border-b border-border">
           {([

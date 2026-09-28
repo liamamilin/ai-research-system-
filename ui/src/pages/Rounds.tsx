@@ -4,7 +4,7 @@ import { getRounds, getReportRaw, runRound, cancelRound, retryRound, type Round 
 import { RoundDetail } from "@/components/RoundDetail";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn, formatTokens } from "@/lib/utils";
-import { RefreshCw, Play, Square } from "lucide-react";
+import { RefreshCw, Play, Square, AlertTriangle } from "lucide-react";
 
 const PIPELINE_DIR = "practical_ai_intelligence";
 
@@ -225,16 +225,32 @@ export function RoundsPage() {
                   {round.tokens_total ? (
                     <span className="text-xs text-text-muted">{formatTokens(round.tokens_total)} tok</span>
                   ) : null}
-                  {(round.artifacts || []).map((a) => (
-                    <button
-                      key={a.name}
-                      onClick={() => downloadArtifact(round.date, a.name)}
-                      className="text-xs px-1.5 py-0.5 rounded border border-border text-text-muted hover:text-text hover:bg-bg-hover transition font-mono"
-                      title={`下载 ${a.name}（${(a.size / 1024).toFixed(1)} KB）`}
-                    >
-                      {a.name.replace(/\.json$/, "")}
-                    </button>
-                  ))}
+                  {(round.artifacts || []).map((a) => {
+                    // Keyed on warnings, not on emptiness: an empty artifact is
+                    // only suspicious when something says so. A round with
+                    // genuinely no actions is not a problem to flag.
+                    const hurt = !!a.warnings?.length;
+                    return (
+                      <button
+                        key={a.name}
+                        onClick={() => downloadArtifact(round.date, a.name)}
+                        className={cn(
+                          "text-xs px-1.5 py-0.5 rounded border font-mono transition",
+                          hurt
+                            ? "border-warning/60 text-warning hover:bg-warning/10"
+                            : "border-border text-text-muted hover:text-text hover:bg-bg-hover",
+                        )}
+                        title={
+                          hurt
+                            ? `${a.name}：${a.warnings?.join("；")}`
+                            : `下载 ${a.name}（${(a.size / 1024).toFixed(1)} KB）`
+                        }
+                      >
+                        {hurt && <AlertTriangle className="w-3 h-3 inline mr-1 -mt-0.5" />}
+                        {a.name.replace(/\.json$/, "")}
+                      </button>
+                    );
+                  })}
                   <button
                     onClick={() => setDetailDate(round.date)}
                     className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline"
