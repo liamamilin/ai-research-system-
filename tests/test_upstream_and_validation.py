@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from core.research import report_problem
-from web.runner.pipeline import STAGE_DEPS, collect_upstream
+from core.pipeline_docs import STAGE_DEPS, collect_upstream
 
 
 @pytest.fixture()
@@ -24,7 +24,7 @@ def round_dir(tmp_path):
     """A round directory with one document per stage."""
     root = tmp_path / "2026-01-02"
     root.mkdir()
-    from web.runner.pipeline import STAGES
+    from core.pipeline_docs import STAGES
     for key, filename, _label in STAGES:
         (root / filename).write_text(
             f"# {key}\n\n" + f"内容 {key}。" * 400, encoding="utf-8")
@@ -49,7 +49,7 @@ def test_the_tail_of_a_radar_survives_the_budget():
     and 7. Truncating at the head handed P7 the opening nine items and none of
     them, which is the worst possible trade for a 32k document and a 10k share.
     """
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({
         "1. 高信号更新": 18000,
@@ -75,7 +75,7 @@ def test_the_result_never_exceeds_the_share():
     """The preamble and the omission note are emitted outside the section
     budget, so they have to be subtracted from it. P7 came out at 10,313
     against a 10,000 share before this was accounted for."""
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({"1. 开篇": 26000, "2. 中段": 6000, "3. 收尾": 3000})
     for limit in (4000, 6000, 10000):
@@ -84,7 +84,7 @@ def test_the_result_never_exceeds_the_share():
 
 
 def test_a_short_enough_document_is_handed_over_whole():
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({"1. 更新": 2000, "2. 对比表": 1500})
     out = _select_sections(text, 10000, path="radar.md")
@@ -100,7 +100,7 @@ def test_an_oversized_first_section_is_clipped_not_dropped():
     budget -- a third of what head-truncation had managed, with the framing
     gone too.
     """
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({"1. 巨大的开篇": 30000, "2. 中段": 6000, "3. 收尾": 3000})
     out = _select_sections(text, 10000, path="radar.md")
@@ -117,7 +117,7 @@ def test_a_two_section_document_keeps_both_even_if_the_budget_is_not_full():
     """Two sections is the floor: once the first is clipped there is nothing
     left to take, so the share is not filled. Documented rather than papered
     over -- an unfilled budget is better than a cut section."""
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({"1. 巨大的开篇": 30000, "2. 收尾": 2000})
     out = _select_sections(text, 10000, path="radar.md")
@@ -128,7 +128,7 @@ def test_a_two_section_document_keeps_both_even_if_the_budget_is_not_full():
 
 
 def test_selection_keeps_sections_in_reading_order():
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = _radar({"1. 甲": 4000, "2. 乙": 4000, "3. 丙": 4000, "4. 丁": 4000})
     out = _select_sections(text, 10000, path="radar.md")
@@ -139,7 +139,7 @@ def test_selection_keeps_sections_in_reading_order():
 
 
 def test_an_unstructured_document_keeps_both_ends():
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     text = ("开头标记。" + "填充" * 6000 + "结尾标记。")
     out = _select_sections(text, 4000, path="plain.md")
@@ -153,7 +153,7 @@ def test_the_budget_is_never_silently_spent_on_a_prefix():
     """The share is 60k/6; P1 is 32k. Whatever is dropped, most of the share
     has to be filled -- otherwise the stage is handed a fragment and told it
     received the full document."""
-    from web.runner.pipeline import _select_sections
+    from core.pipeline_docs import _select_sections
 
     root = Path(os.path.dirname(os.path.abspath(__file__))).parent
     real = root / "output" / "practical_ai_intelligence"
@@ -205,8 +205,8 @@ def test_collection_follows_the_declared_dependencies(round_dir):
             assert text == "", key
             continue
         for dep in deps:
-            from web.runner.pipeline import _STAGE_FILE
-            assert _STAGE_FILE[dep] in text, f"{key} is missing {dep}"
+            from core.pipeline_docs import STAGE_FILE
+            assert STAGE_FILE[dep] in text, f"{key} is missing {dep}"
 
 
 def test_a_missing_upstream_document_is_stated_not_hidden(tmp_path):
@@ -223,18 +223,18 @@ def test_a_stub_document_is_ignored_with_a_reason(tmp_path):
     """A 10-character file is not a radar; treating it as one invents findings."""
     root = tmp_path / "round"
     root.mkdir()
-    from web.runner.pipeline import STAGES, _STAGE_FILE
+    from core.pipeline_docs import STAGES, STAGE_FILE
     for key, filename, _label in STAGES:
         body = "# x\n\nok" if key.startswith("01_") else f"# {key}\n\n" + "内容。" * 500
         (root / filename).write_text(body, encoding="utf-8")
     text, notes = collect_upstream("07_product_content_opportunities", str(root))
     assert "过短" in " ".join(notes)
-    assert _STAGE_FILE["01_model_and_pricing_radar"] not in text
+    assert STAGE_FILE["01_model_and_pricing_radar"] not in text
 
 
 def test_injection_respects_a_length_budget(tmp_path):
     """Six radars run to ~150k chars, which is the whole context budget."""
-    from web.runner.pipeline import STAGES, UPSTREAM_CHAR_BUDGET, _STAGE_FILE
+    from core.pipeline_docs import STAGES, UPSTREAM_CHAR_BUDGET, STAGE_FILE
     root = tmp_path / "round"
     root.mkdir()
     for key, filename, _label in STAGES:
@@ -246,11 +246,11 @@ def test_injection_respects_a_length_budget(tmp_path):
     assert "省略了约" in text
     # And the budget is shared, so no radar is dropped entirely.
     for key in STAGES[1:7]:
-        assert _STAGE_FILE[key[0]] in text, key[0]
+        assert STAGE_FILE[key[0]] in text, key[0]
 
 
 def test_truncation_is_declared_inside_the_text(tmp_path):
-    from web.runner.pipeline import STAGES
+    from core.pipeline_docs import STAGES
     root = tmp_path / "round"
     root.mkdir()
     for key, filename, _label in STAGES:

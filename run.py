@@ -138,6 +138,36 @@ def _print_single_status(name: str, state: dict, compact: bool = False):
         print(f"  Error:      {error}")
 
 
+def _upstream_vars(args, engine, name: str) -> dict:
+    """``{upstream_reports}`` for one stage, or nothing when it is not a stage.
+
+    Empty for every job that is not a pipeline stage, so an ordinary run is
+    unaffected. When it is a stage but the documents are missing, the value
+    says so in words rather than leaving the prompt's claim of an attached
+    section dangling.
+    """
+    from core.pipeline_docs import STAGE_DEPS, upstream_for
+
+    job = load_job(args.jobs_dir, name)
+    if not job:
+        return {}
+    key = (job.get("_file") or name).split("/")[-1]
+    for suffix in (".yaml", ".yml"):
+        if key.endswith(suffix):
+            key = key[: -len(suffix)]
+    if not STAGE_DEPS.get(key):
+        return {}
+    # The output template is relative to the workspace, and the engine is what
+    # knows where that is -- not the process CWD.
+    root = getattr(engine, "workspace_dir", "") or "."
+    upstream = upstream_for(key, job, engine._now().strftime("%Y-%m-%d"), root=root)
+    if not upstream:
+        return {}
+    logging.getLogger("ai_research").info(
+        "Stage %s: upstream %d chars", key, len(upstream))
+    return {"upstream_reports": upstream}
+
+
 def main():
     args = parse_args()
 
@@ -255,6 +285,12 @@ def main():
 
     results = {}
     for name in names:
+        # Hand a synthesis stage the documents it is meant to build on.
+        # The Web runner has always done this. The launchd agent that runs the
+        # daily round comes through here instead, and without this P7/P8/P9 were
+        # sent a literal "{upstream_reports}" together with a paragraph
+        # promising documents that were never attached to the prompt.
+        engine.prompt_vars = _upstream_vars(args, engine, name)
         path = engine.run_job(name, verbose=args.verbose)
         results[name] = path
         status = "✓" if path else "✗"

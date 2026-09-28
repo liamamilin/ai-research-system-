@@ -117,8 +117,8 @@ def retry_env(tmp_path, monkeypatch):
     for _key, filename, _label in pipeline.STAGES:
         (round_dir / filename).write_text("x", encoding="utf-8")
     # P1 "failed" in the previous attempt, everything else succeeded
-    os.remove(round_dir / pipeline._STAGE_FILE[P1])
-    (round_dir / pipeline._STAGE_FILE[P1]).write_text("x", encoding="utf-8")
+    os.remove(round_dir / pipeline.STAGE_FILE[P1])
+    (round_dir / pipeline.STAGE_FILE[P1]).write_text("x", encoding="utf-8")
 
     # Previous attempt: everything succeeded except P1, which failed.
     previous_rounds = {
@@ -132,8 +132,8 @@ def retry_env(tmp_path, monkeypatch):
             "stages": {
                 key: {
                     "key": key,
-                    "label": pipeline._STAGE_LABEL[key],
-                    "file": pipeline._STAGE_FILE[key],
+                    "label": pipeline.STAGE_LABEL[key],
+                    "file": pipeline.STAGE_FILE[key],
                     "group": next(g for g, keys in pipeline.GROUPS if key in keys),
                     "status": "failed" if key == P1 else "success",
                 }
