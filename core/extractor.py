@@ -164,7 +164,16 @@ def extract_report(
         len(raw_content),
     )
 
-    cleaned = _call_extraction_api(raw_content, ext_config)
+    # The contract is that extraction never costs you the report. The call
+    # catches URLError/JSONDecodeError/OSError, but a truncated response raises
+    # http.client.HTTPException, which is not an OSError, and a malformed body
+    # can raise KeyError -- either of which used to propagate out of here and
+    # take a finished report with it.
+    try:
+        cleaned = _call_extraction_api(raw_content, ext_config)
+    except Exception as exc:  # noqa: BLE001 - see above
+        logger.warning("Extraction raised %s, keeping raw content", exc)
+        return raw_content
 
     if cleaned is None:
         logger.warning("Extraction failed, keeping raw content")
