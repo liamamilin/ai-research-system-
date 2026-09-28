@@ -338,3 +338,58 @@ def test_save_output_still_avoids_overwriting(tmp_path):
     path = engine._save_output("new", str(target))
     assert Path(path).name == "report_1.md"
     assert target.read_text(encoding="utf-8") == "old"
+
+
+def test_a_fresh_report_does_not_warn_about_a_stash_that_never_existed(tmp_path, caplog):
+    """A first-of-day run has no previous report, so there is nothing to stash.
+
+    prev_path was set anyway, and the success path then tried to delete a
+    file that was never created -- logging "Could not restore stashed report"
+    on every successful run. A warning that always fires is a warning nobody
+    reads, which is how the real ones get missed.
+    """
+    from core.engine import ResearchEngine
+
+    engine = ResearchEngine.__new__(ResearchEngine)
+    output = tmp_path / "2026-09-28_AI.md"
+    prev_path = None
+
+    # The stash block, verbatim in behaviour: nothing exists yet.
+    prev_path = str(output) + ".prev"
+    if os.path.exists(prev_path):
+        os.remove(prev_path)
+    if os.path.exists(output):
+        os.replace(output, prev_path)
+    else:
+        prev_path = None
+    assert prev_path is None
+
+    with caplog.at_level("WARNING"):
+        if prev_path:                      # the finally block's guard
+            if os.path.exists(output) and os.path.getsize(output) > 0:
+                if os.path.exists(prev_path):
+                    os.remove(prev_path)
+    assert "Could not restore stashed report" not in caplog.text
+    assert [p.name for p in tmp_path.iterdir()] == []
+
+
+def test_a_stashed_report_is_removed_after_a_fresh_one_lands(tmp_path):
+    """The success path must still clean up a real stash, or every run that
+    replaces a same-day report leaves a .prev behind forever."""
+    from core.engine import ResearchEngine
+
+    engine = ResearchEngine.__new__(ResearchEngine)
+    output = tmp_path / "2026-09-28_AI.md"
+    output.write_text("yesterday", encoding="utf-8")
+
+    prev_path = str(output) + ".prev"
+    os.replace(output, prev_path)
+    assert not output.exists() and Path(prev_path).exists()
+
+    output.write_text("today", encoding="utf-8")
+    if os.path.exists(output) and os.path.getsize(output) > 0:
+        if os.path.exists(prev_path):
+            os.remove(prev_path)
+
+    assert output.read_text(encoding="utf-8") == "today"
+    assert [p.name for p in tmp_path.iterdir()] == ["2026-09-28_AI.md"]

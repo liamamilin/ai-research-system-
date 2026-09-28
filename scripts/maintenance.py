@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -110,6 +111,44 @@ def prune_sessions(dry_run: bool) -> str:
         return f"sessions: 跳过（{exc}）"
     finally:
         user_db._DB_PATH_OVERRIDE = override
+
+
+def prune_empty_round_dirs(output_dir: Path, days: int, dry_run: bool) -> str:
+    """Remove date directories under the matrix that hold no reports.
+
+    The round creates its directory before the first stage runs, so a round
+    that was blocked by the budget guard, cancelled, or killed leaves an empty
+    date directory behind. Four of them had accumulated. They are invisible in
+    the report tree (which only lists directories that contain files) and the
+    round is recorded properly in state/pipeline_rounds.json regardless, so an
+    empty one is pure litter.
+
+    Only directories directly under the pipeline root are considered, and only
+    ones that match a date, so this can never walk into a report folder.
+    """
+    root = output_dir / "practical_ai_intelligence"
+    if not root.is_dir():
+        return "空轮次目录: 无可清理"
+    cutoff = time.time() - days * 86400
+    removed: list[str] = []
+    for path in root.iterdir():
+        # pathlib.glob("*/") ignores the trailing slash and matches files, so
+        # this has to be an explicit is_dir() check.
+        if not path.is_dir() or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", path.name):
+            continue
+        try:
+            if any(path.iterdir()):
+                continue
+            if path.stat().st_mtime >= cutoff:
+                continue
+            if not dry_run:
+                path.rmdir()
+            removed.append(path.name)
+        except OSError:
+            continue
+    if not removed:
+        return "空轮次目录: 无可清理"
+    return f"空轮次目录: 删除 {len(removed)} 个（{', '.join(sorted(removed))}）"
 
 
 def prune_lock_sidecars(state_dir: Path, days: int, dry_run: bool) -> str:
@@ -208,6 +247,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="每日维护：回收数据库、清理会话/日志/锁/备份")
     parser.add_argument("--state-dir", default=str(ROOT / "state"))
     parser.add_argument("--logs-dir", default=str(ROOT / "logs"))
+    parser.add_argument("--output-dir", default=str(ROOT / "output"))
     parser.add_argument("--log-days", type=int, default=DEFAULT_LOG_DAYS)
     parser.add_argument("--backups", type=int, default=DEFAULT_BACKUPS)
     parser.add_argument("--lock-days", type=int, default=DEFAULT_LOCK_DAYS)
@@ -216,6 +256,7 @@ def main() -> int:
 
     state_dir = Path(args.state_dir)
     logs_dir = Path(args.logs_dir)
+    output_dir = Path(args.output_dir)
     os.environ.setdefault("AREC_STATE_DIR", str(state_dir))
 
     prefix = "[dry-run] " if args.dry_run else ""
@@ -225,6 +266,7 @@ def main() -> int:
         ("locks", lambda: prune_lock_sidecars(state_dir, args.lock_days, args.dry_run)),
         ("logs", lambda: prune_logs(logs_dir, args.log_days, args.dry_run)),
         ("backups", lambda: prune_backups(state_dir, args.backups, args.dry_run)),
+        ("empty-rounds", lambda: prune_empty_round_dirs(output_dir, args.lock_days, args.dry_run)),
     )
     for name, step in steps:
         try:

@@ -141,6 +141,14 @@ class ResearchEngine:
                         os.remove(prev_path)
                     if os.path.exists(output_path):
                         os.replace(output_path, prev_path)
+                    else:
+                        # Nothing to protect. Output paths are date-stamped, so
+                        # the first run of a day has no previous report; leaving
+                        # prev_path set made the success path in `finally` try to
+                        # delete a stash that was never created, logging a
+                        # spurious "Could not restore stashed report" warning on
+                        # every fresh report.
+                        prev_path = None
                 except OSError as exc:
                     logger.warning("Could not stash stale output: %s", exc)
                     prev_path = None
@@ -284,7 +292,8 @@ class ResearchEngine:
             if prev_path and output_path:
                 try:
                     if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                        os.remove(prev_path)   # fresh report saved
+                        if os.path.exists(prev_path):
+                            os.remove(prev_path)   # fresh report saved
                     elif os.path.exists(prev_path):
                         os.replace(prev_path, output_path)
                         logger.info("Restored previous report: %s", output_path)

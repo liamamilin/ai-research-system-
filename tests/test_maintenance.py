@@ -190,6 +190,76 @@ def test_stale_lock_sidecars_are_removed(tree):
     assert fresh.exists(), "a live sidecar was removed"
 
 
+# --- empty round directories -------------------------------------------------
+
+def _round_tree(tmp_path):
+    root = tmp_path / "output" / "practical_ai_intelligence"
+    (root / "2026-06-26").mkdir(parents=True)          # a round that produced nothing
+    (root / "2026-06-27").mkdir(parents=True)
+    (root / "2026-09-26").mkdir(parents=True)          # a real one
+    (root / "2026-09-26" / "09_executive.md").write_text("# report", encoding="utf-8")
+    (tmp_path / "output" / "research").mkdir(parents=True)
+    return root
+
+
+def test_empty_round_directories_are_removed(tmp_path):
+    """A blocked, cancelled or killed round leaves its date directory behind.
+
+    Four had piled up here. They never show in the report tree, which only
+    lists directories that contain files, and the round itself is recorded in
+    state/pipeline_rounds.json -- so an empty one carries no information.
+    """
+    root = _round_tree(tmp_path)
+    old = time.time() - 30 * 86400
+    for stale in (root / "2026-06-26", root / "2026-06-27"):
+        os.utime(stale, (old, old))
+
+    maintenance.prune_empty_round_dirs(tmp_path / "output", days=7, dry_run=False)
+
+    assert not (root / "2026-06-26").exists()
+    assert not (root / "2026-06-27").exists()
+    assert (root / "2026-09-26" / "09_executive.md").exists(), "a real round was removed"
+
+
+def test_a_fresh_empty_round_directory_is_left_alone(tmp_path):
+    """Today's round is created before the first stage writes; deleting it
+    mid-run would make the stages' own output paths disappear underneath."""
+    root = _round_tree(tmp_path)
+    (root / "2026-09-28").mkdir()
+
+    maintenance.prune_empty_round_dirs(tmp_path / "output", days=7, dry_run=False)
+
+    assert (root / "2026-09-28").is_dir()
+
+
+def test_pruning_never_touches_a_non_date_directory(tmp_path):
+    """output/research and friends must be unreachable by this step."""
+    root = _round_tree(tmp_path)
+    notes = root / "notes"
+    notes.mkdir()
+    old = time.time() - 30 * 86400
+    os.utime(notes, (old, old))
+    os.utime(root, (old, old))
+
+    maintenance.prune_empty_round_dirs(tmp_path / "output", days=7, dry_run=False)
+
+    assert notes.is_dir(), "a non-date directory was deleted"
+    assert (tmp_path / "output" / "research").is_dir()
+
+
+def test_dry_run_reports_empty_rounds_without_deleting(tmp_path):
+    root = _round_tree(tmp_path)
+    old = time.time() - 30 * 86400
+    for stale in root.iterdir():
+        if stale.name.startswith("2026-06"):
+            os.utime(stale, (old, old))
+
+    report = maintenance.prune_empty_round_dirs(tmp_path / "output", days=7, dry_run=True)
+
+    assert "2026-06-26" in report
+    assert (root / "2026-06-26").is_dir()
+
+
 # --- backups -----------------------------------------------------------------
 
 def test_backups_are_capped(tree):
