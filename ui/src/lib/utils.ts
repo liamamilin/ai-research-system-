@@ -30,3 +30,14 @@ export function formatTokens(n: number | null | undefined): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
 }
+
+/** Reduce a priority label to its bare code: "**P0**" / "`P1`" / " p2 " -> "P0".
+ *
+ *  Priority drives a colour lookup that is an exact match, so anything the
+ *  model wrapped in markup fell through to the default. The parser now strips
+ *  it, but rows imported before that still hold it, and a top-priority action
+ *  rendered in the muted grey of a medium one.
+ */
+export function normalizePriority(value: string | null | undefined): string {
+  return (value || "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}

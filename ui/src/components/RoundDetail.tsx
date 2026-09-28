@@ -12,7 +12,7 @@ import {
   type TrackedItem,
 } from "@/api";
 import { useAuthStore } from "@/lib/auth-store";
-import { cn } from "@/lib/utils";
+import { cn, normalizePriority } from "@/lib/utils";
 
 type Tab = "actions" | "watch" | "diff";
 
@@ -22,11 +22,15 @@ const PRIORITY_STYLE: Record<string, string> = {
   P2: "border-border text-text-muted",
 };
 
-function PriorityBadge({ value }: { value: string }) {
-  if (!value) return null;
+export function PriorityBadge({ value }: { value: string }) {
+  const key = normalizePriority(value);
+  if (!key) return null;
   return (
-    <span className={cn("badge border text-[10px] px-1 py-0", PRIORITY_STYLE[value] || PRIORITY_STYLE.P2)}>
-      {value}
+    <span
+      data-priority={key}
+      className={cn("badge border text-[10px] px-1 py-0", PRIORITY_STYLE[key] || PRIORITY_STYLE.P2)}
+    >
+      {key}
     </span>
   );
 }
