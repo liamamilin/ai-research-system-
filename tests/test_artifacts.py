@@ -78,6 +78,33 @@ def test_parse_watchlist_extracts_rows():
     assert "https://openai.com/products/release-notes/" in items[0]["evidence"]
 
 
+def test_the_watchlist_columns_the_prompt_asks_for_are_all_known():
+    """The prompt and the parser must agree on the column names.
+
+    Section 9 of the P9 output spec now says "Table: topic, trigger signal, why
+    watch it, check-by date, source URL". Naming columns the alias table has
+    never heard of produces a table full of unrecognized-header warnings, which
+    is how the first 2026-09-28 round shipped 13 items with two of the five
+    columns dropped.
+    """
+    table = """# 报告
+
+## 9. Watchlist
+
+| topic | trigger signal | why watch it | check-by date | source URL |
+| --- | --- | --- | --- | --- |
+| Claude Sonnet 5.5 是否上线 | 官方定价页出现该型号 | 会挤压中端位 | 2026-10-02 | https://a.test/leak |
+"""
+    parsed = artifacts.parse_watchlist(table)
+    assert parsed["warnings"] == [], parsed["warnings"]
+    item = parsed["items"][0]
+    assert item["topic"] == "Claude Sonnet 5.5 是否上线"
+    assert item["trigger"].startswith("官方定价页")
+    assert item["watch_rationale"] == "会挤压中端位"
+    assert item["deadline"] == "2026-10-02"
+    assert item["evidence"] == "https://a.test/leak"
+
+
 def test_a_watchlist_written_as_a_list_is_still_read():
     """The one section with no `Table:` spec got written as a list.
 

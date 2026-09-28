@@ -58,8 +58,8 @@ _FIELD_ALIASES: dict[str, list[str]] = {
         "负责人", "所需角色", "角色", "承担者", "owner", "role", "responsible", "assignee",
     ],
     "deadline": [
-        "时限", "截止", "截止时间", "期限", "完成时间",
-        "deadline", "duedate", "due", "when", "timeline",
+        "时限", "截止", "截止时间", "期限", "完成时间", "复查日期", "复查时间", "复看日期",
+        "deadline", "duedate", "due", "when", "timeline", "checkbydate", "recheckdate",
     ],
     "acceptance": [
         "验收标准", "验收", "完成标准", "acceptance", "acceptancecriteria", "definitionofdone",
@@ -84,15 +84,17 @@ _FIELD_ALIASES: dict[str, list[str]] = {
         "观察点", "观察要点", "watchpoint", "watchitemdetail",
     ],
     "watch_rationale": [
-        "为什么观察", "为何观察", "观察理由", "理由", "原因",
-        "whys", "reason", "why",
+        "为什么观察", "为何观察", "观察理由", "理由", "原因", "为何关注", "关注理由",
+        "whys", "reason", "why", "whywatchit", "whywatch", "rationale",
     ],
     "trigger": [
         "触发信号", "触发条件", "触发条件复审时点", "触发条件/复审时点", "触发", "复审时点", "阈值",
         "trigger", "triggers", "signal", "signals", "watchfor", "threshold",
+        "triggersignal", "watchforsignal",
     ],
     "evidence": [
-        "依据", "证据", "evidence", "basis",
+        "依据", "证据", "来源", "出处", "来源url", "来源链接", "原始链接",
+        "evidence", "basis", "sourceurl", "source", "link",
     ],
 }
 
