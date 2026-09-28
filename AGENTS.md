@@ -90,6 +90,23 @@ path. The matrix's two LaunchAgents (`com.arec.pipeline.daily` /
 (edit / pause / restorable delete); see `spec/scheduling.md`.
 Tests must isolate state and mock installation; never touch real user cron/agents.
 
+### After a round: check the artifacts
+
+```bash
+python scripts/check_round_quality.py            # newest round
+python scripts/check_round_quality.py 2026-09-28 # a specific one
+```
+
+A round can report 10/10 and still be wrong in ways nothing else notices: the
+synthesis stages ran with no upstream documents, the watchlist parsed to
+nothing, a citation figure was measured with a broken extractor. This reads the
+finished round and fails loudly on each of those. Exit code 1 means problems.
+Run it after a round, and before believing a number on the rounds page.
+
+Note that a recorded citation count is written once, at run time. If the URL
+extractor changes later, past rounds keep the old figure -- the checker reports
+that as stale rather than pretending the number is current.
+
 ## Adding a Job
 
 Create a YAML file in the appropriate `jobs/` subdirectory (or copy from `jobs/_templates/`):
