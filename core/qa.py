@@ -50,7 +50,11 @@ def stage_legend(hits: list[dict]) -> str:
         if not name or "_" not in name:
             continue
         number, _, rest = name.partition("_")
-        if not number.isdigit() or not rest:
+        # 00 is the collection plan, not a stage: the pipeline numbers its
+        # stages 01..09 and calls them P1..P9. Calling it P0 was worse than
+        # useless -- asked about P1, the model read the legend, saw P0, P7, P9
+        # and no P1, and concluded P1 did not exist.
+        if not number.isdigit() or not rest or int(number) == 0:
             continue
         label = rest[:-3] if rest.endswith(".md") else rest
         if label and number not in pairs:
@@ -58,7 +62,11 @@ def stage_legend(hits: list[dict]) -> str:
     if not pairs:
         return ""
     listed = "，".join(f"P{int(n)}={pairs[n]}" for n in sorted(pairs, key=int))
-    return f"阶段编号对应：{listed}。"
+    return (
+        f"本次检索到的文件与阶段编号对应：{listed}。"
+        "这只是本次召回的子集，编号里没出现的阶段不代表不存在；"
+        "若用户问的阶段不在其中，请先按文件名和内容判断，不要直接断言该阶段缺失。"
+    )
 
 
 def build_messages(question: str, hits: list[dict]) -> list[dict]:

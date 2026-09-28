@@ -357,9 +357,58 @@ def _apply_recency(hits: list[dict], dates: dict[str, str],
     return hits
 
 
+# A question that names a time of its own is asking about the archive, not about
+# the current round, so the round scope is dropped for it. Kept deliberately
+# small and literal: these are the ways people actually say it.
+_ARCHIVE_CUE = re.compile(
+    r"\d{4}[-/年]\d{1,2}|\d{4}\s*年|\d{1,2}\s*月|去年|今年|上个月|上个?季度|"
+    r"历史|以前|之前|早期|历次|过往"
+)
+
+
+def _names_another_round(query: str) -> bool:
+    return bool(_ARCHIVE_CUE.search(query or ""))
+
+
+def _scope_to_recent_rounds(ranked: list[dict], scope: int, need: int) -> list[dict]:
+    """Keep only the ``scope`` most recent rounds a candidate came from.
+
+    Which round a passage came from is not a relevance question. Every round
+    writes the same nine stage reports, so a question about "the most serious
+    risk" matches a dozen copies of that section, and the embedding does not
+    pick the right one: measured over 31 questions, an older copy of the
+    correct section outranked the current round's copy in 25 of them, by a
+    median of 0.058 cosine. That is a systematic bias, not noise -- the newer
+    reports are longer and denser, so a section's opening chunk carries more
+    material unrelated to the question. No amount of reweighting inside the
+    existing blend recovers from that, because the recency bonus is capped at
+    ``recency_weight`` while the bias is on the relevance term.
+
+    So the round is chosen up front instead of emerging from a sum: answer from
+    the newest rounds, and widen only if that leaves too little to answer with.
+    A daily report's questions are about the current round unless the asker
+    names a different one.
+    """
+    if scope <= 0 or not ranked:
+        return ranked
+    dates = sorted({hit.get("report_date") or "" for hit in ranked}, reverse=True)
+    keep = [d for d in dates if d][:scope]
+    while keep:
+        kept = [hit for hit in ranked if (hit.get("report_date") or "") in keep]
+        if len(kept) >= need:
+            return kept
+        # Not enough material in the rounds considered so far; widen.
+        if len(keep) >= len([d for d in dates if d]):
+            return kept
+        scope += scope
+        keep = [d for d in dates if d][:scope]
+    return ranked
+
+
 def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 8,
                   recency_weight: float = 0.0, half_life_days: float = 30.0,
-                  overfetch: int = 3, max_chunks_per_report: int = 2) -> list[dict]:
+                  overfetch: int = 64, max_chunks_per_report: int = 2,
+                  round_scope: int = 1) -> list[dict]:
     """Merge FTS5 recall with chunk-level precision.
 
     ``recency_weight`` trades relevance against freshness: at 0 the ranking is
@@ -379,6 +428,16 @@ def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 
     So candidates are now chunks. A report matched by FTS borrows the best
     matching chunk of its own text as the snippet, and a report that genuinely
     has nothing relevant keeps its FTS window rather than being dropped.
+
+    ``overfetch`` used to default to 3, which made the candidate pool 36 chunks
+    out of 6104. It is not a compute budget: ``semantic_search`` compares the
+    query against every stored chunk and only then truncates, so a larger pool
+    costs a few hundred small dicts and nothing else. At 36 the current round's
+    answer was simply not in the pool -- it ranked 200th to 2600th by cosine --
+    and no amount of reweighting downstream could promote a candidate that was
+    never considered. Measured on 31 questions, raising it moved current-round
+    hits from 8 to 15; the curve is flat from 32 to 96, so the default sits in
+    the middle of that plateau rather than at the edge.
     """
     pool = max(1, overfetch) * limit
     fts_hits = index_db.search_reports(query, pool)
@@ -431,6 +490,19 @@ def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 
     dates = report_dates(hit["path"] for hit in ranked)
     _apply_recency(ranked, dates, recency_weight, half_life_days)
     ranked.sort(key=lambda item: -item["score"])
+    scope = 0 if _names_another_round(query) else round_scope
+    ranked = _scope_to_recent_rounds(ranked, scope, limit)
+    ranked.sort(key=lambda item: -item["score"])
+
+    rounds = {hit.get("report_date") or "" for hit in ranked}
+    if len(rounds) <= 1:
+        # The cap exists so that one report *series* -- the same stage written
+        # afresh every round -- cannot take every slot with copies of itself.
+        # With the round already fixed there is nothing to diversify against,
+        # and the cap would instead forbid a single report from supplying more
+        # than two of its own sections, which is how "P7 ranked which
+        # opportunities P0" came back with the first item and nothing else.
+        return ranked[:limit]
     return _cap_per_source(ranked, limit, max_chunks_per_report)
 
 

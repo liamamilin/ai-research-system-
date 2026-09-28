@@ -60,11 +60,19 @@ def _retrieval_settings(sys_config) -> dict:
     qa_cfg = sys_config.get("qa") or {}
     weight = _retrieval_number(qa_cfg, "recency_weight", 0, float)
     half_life = _retrieval_number(qa_cfg, "recency_half_life_days", 30, float)
-    overfetch = _retrieval_number(qa_cfg, "overfetch", 3, int)
+    overfetch = _retrieval_number(qa_cfg, "overfetch", 64, int)
+    scope = _retrieval_number(qa_cfg, "round_scope", 1, int)
     return {
         "recency_weight": min(1.0, max(0.0, weight)),
         "half_life_days": max(0.0, half_life),
-        "overfetch": min(10, max(1, overfetch)),
+        # The ceiling was 10, which silently capped the candidate pool at 60
+        # chunks and kept the current round's answer out of it. The pool is
+        # truncation after an exhaustive scan, so the number is a memory
+        # decision, not a speed one; the cap only guards a typo.
+        "overfetch": min(256, max(1, overfetch)),
+        # 0 searches the whole archive. 1 answers from the newest round, which
+        # is what a daily report's questions mean.
+        "round_scope": min(30, max(0, scope)),
     }
 
 

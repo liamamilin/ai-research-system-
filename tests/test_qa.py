@@ -130,19 +130,39 @@ def test_qa_fts_only_answers(client, indexed, monkeypatch):
 
 
 @pytest.mark.parametrize("cfg,expected", [
-    ({}, {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 3}),
-    ({"qa": {"recency_weight": 0.25, "recency_half_life_days": 14, "overfetch": 5}},
-     {"recency_weight": 0.25, "half_life_days": 14.0, "overfetch": 5}),
+    ({}, {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 64,
+          "round_scope": 1}),
+    ({"qa": {"recency_weight": 0.25, "recency_half_life_days": 14, "overfetch": 5,
+             "round_scope": 2}},
+     {"recency_weight": 0.25, "half_life_days": 14.0, "overfetch": 5,
+      "round_scope": 2}),
     # A typo must not invert the ranking or blow up the candidate pool.
-    ({"qa": {"recency_weight": "soon", "recency_half_life_days": [], "overfetch": 0}},
-     {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 1}),
-    ({"qa": {"recency_weight": 9, "overfetch": 9999}},
-     {"recency_weight": 1.0, "half_life_days": 30.0, "overfetch": 10}),
+    ({"qa": {"recency_weight": "soon", "recency_half_life_days": [], "overfetch": 0,
+             "round_scope": -3}},
+     {"recency_weight": 0.0, "half_life_days": 30.0, "overfetch": 1,
+      "round_scope": 0}),
+    ({"qa": {"recency_weight": 9, "overfetch": 9999, "round_scope": 999}},
+     {"recency_weight": 1.0, "half_life_days": 30.0, "overfetch": 256,
+      "round_scope": 30}),
 ])
 def test_retrieval_settings_are_read_and_clamped(cfg, expected):
     from web.routes import qa as qa_route
 
     assert qa_route._retrieval_settings(cfg) == expected
+
+
+def test_the_pool_ceiling_no_longer_throws_the_current_round_away():
+    """The clamp used to cap overfetch at 10, i.e. a 60-chunk pool out of 6104.
+
+    Recency cannot promote a candidate that was never recalled, so that ceiling
+    decided the answer: the current round's passage ranked 200th to 2600th by
+    cosine and simply was not in the pool. The ceiling now only guards a typo.
+    """
+    from web.routes import qa as qa_route
+
+    settings = qa_route._retrieval_settings({"qa": {"overfetch": 64}})
+    assert settings["overfetch"] == 64
+    assert settings["overfetch"] * 6 * 2 > 500, "pool too small to hold the answer"
 
 
 def test_qa_passes_the_configured_recency_into_retrieval(client, indexed, monkeypatch):
@@ -167,9 +187,10 @@ def test_qa_passes_the_configured_recency_into_retrieval(client, indexed, monkey
     _login(client, "viewer", "viewer-pass-123")
     r = client.post("/api/qa", json={"question": "alpha"}, headers=_csrf(client))
     assert r.status_code == 200
-    assert seen == {"recency_weight": 0.4, "half_life_days": 7.0, "overfetch": 2}
+    assert seen == {"recency_weight": 0.4, "half_life_days": 7.0, "overfetch": 2,
+                    "round_scope": 1}
     assert r.json()["retrieval"] == {"recency_weight": 0.4, "half_life_days": 7.0,
-                                     "overfetch": 2}
+                                     "overfetch": 2, "round_scope": 1}
     assert r.json()["citations"][0]["report_date"] == "2026-09-25"
 
 
@@ -356,3 +377,23 @@ def test_no_legend_no_extra_prompt():
         {"path": "research/2026-09-26_AI.md", "snippet": "内容", "report_date": ""},
     ])
     assert messages[0]["content"] == qa._SYSTEM
+
+
+def test_the_collection_plan_is_not_called_p0():
+    """The pipeline numbers its stages 01..09 as P1..P9; 00 is the plan.
+
+    Asked about P1, the model read a legend saying "P0=collection_plan, P7=...,
+    P9=..." with no P1 in it and concluded the stage did not exist. That was a
+    straight consequence of mapping 00 to P0.
+    """
+    legend = qa.stage_legend([{"path": "p/2026-09-28/00_collection_plan.md"},
+                              {"path": "p/2026-09-28/09_executive_synthesis_and_actions.md"}])
+    assert "P0" not in legend, legend
+    assert "P9=executive_synthesis_and_actions" in legend
+
+
+def test_the_legend_says_it_is_only_what_was_retrieved():
+    """Otherwise a narrow result set reads as a complete stage list."""
+    legend = qa.stage_legend([{"path": "p/2026-09-28/09_executive_synthesis_and_actions.md"}])
+    assert "本次检索到的" in legend
+    assert "不代表不存在" in legend

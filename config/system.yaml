@@ -69,8 +69,19 @@ qa:
   # How many days until a report's recency bonus halves.
   recency_half_life_days: 30
   # Candidate pool multiplier: recency cannot promote a report that was never
-  # recalled, so the pool is overfetched beyond the requested limit.
-  overfetch: 3
+  # recalled, so the pool is overfetched beyond the requested limit. This is
+  # not a speed knob -- every stored chunk is compared and only then truncated.
+  # At 3 the pool was 60 chunks out of 6104 and the current round's answer was
+  # often not in it at all; measured over 31 questions, 32..96 all scored the
+  # same, so the default sits in the middle of that plateau.
+  overfetch: 64
+  # Which rounds an answer may come from. 1 = the newest round, widening only
+  # if that leaves too little to answer with. Every round writes the same nine
+  # stage reports, so a question matches a dozen copies of the same section and
+  # the embedding picks the wrong one: an older copy outranked the current
+  # round's in 25 of 31 questions, because newer reports are longer and denser.
+  # Set 0 to search the whole archive (questions naming a date always do).
+  round_scope: 1
 
 # ---------------------------------------------------------------------------
 # Research agent

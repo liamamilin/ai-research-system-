@@ -49,18 +49,16 @@ def test_a_report_may_not_monopolise_the_context(monkeypatch):
     are the highest-scoring lexical match for any question naming the stage. The
     observed failure was four of six slots.
     """
+    days = ["2026-09-26", "2026-09-25", "2026-09-24", "2026-09-23", "2026-09-22"]
     monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
     monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
-        _hit(_series("2026-09-26"), "masthead 26", 0.9),
-        _hit(_series("2026-09-25"), "masthead 25", 0.89),
-        _hit(_series("2026-09-24"), "masthead 24", 0.88),
-        _hit(_series("2026-09-23"), "masthead 23", 0.87),
-        _hit(_series("2026-09-22"), "masthead 22", 0.86),
-        _hit("other/plan.md", "the actual finding", 0.5, chunk=7),
-    ])
-    monkeypatch.setattr(vectors, "report_dates", lambda paths: {})
+        _hit(_series(d), f"masthead {d}", 0.9 - i / 100)
+        for i, d in enumerate(days)
+    ] + [_hit("other/plan.md", "the actual finding", 0.5, chunk=7)])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        **{_series(d): d for d in days}, "other/plan.md": "2026-09-26"})
 
-    hits = vectors.hybrid_search("q", [0.1], limit=4)
+    hits = vectors.hybrid_search("q", [0.1], limit=4, round_scope=0)
     per_series = sum(1 for h in hits
                      if h["path"].endswith("07_product_content_opportunities.md"))
     assert per_series <= 2, [h["path"] for h in hits]
@@ -166,29 +164,40 @@ def test_every_chunk_reaches_ranking_not_just_the_first_two_of_a_report(monkeypa
 
 
 def test_the_cap_still_shrinks_the_answer(monkeypatch):
-    """The cap is a property of the answer, so it still applies at the end."""
+    """The cap is a property of the answer, so it still applies at the end.
+
+    It groups by filename, which is stable across rounds, so today's and
+    yesterday's copies of P7 draw on the same budget of two.
+    """
     report = _series("2026-09-28")
     monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
     monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
         _hit(report, f"chunk {i}", 0.9 - i / 100, chunk=i) for i in range(5)
-    ])
-    monkeypatch.setattr(vectors, "report_dates", lambda paths: {})
+    ] + [_hit(_series("2026-09-27"), "yesterday's", 0.4, chunk=0)])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        report: "2026-09-28", _series("2026-09-27"): "2026-09-27"})
 
-    hits = vectors.hybrid_search("q", [0.1], limit=5)
+    hits = vectors.hybrid_search("q", [0.1], limit=5, round_scope=0)
     assert len(hits) == 2, [h["snippet"] for h in hits]
 
 
-def test_the_cap_still_shrinks_the_answer(monkeypatch):
-    """The cap is a property of the answer, so it still applies at the end."""
+def test_one_report_may_supply_its_own_sections_when_the_round_is_fixed(monkeypatch):
+    """The cap exists to stop a report *series* taking every slot.
+
+    Once the round is fixed there is nothing to diversify against, and the cap
+    would forbid a single report from giving more than two of its own sections
+    -- which is how "which opportunities did P7 rank P0" came back with the
+    first item and nothing else, the list spanning several chunks.
+    """
     report = _series("2026-09-28")
     monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
     monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
-        _hit(report, f"chunk {i}", 0.9 - i / 100, chunk=i) for i in range(5)
+        _hit(report, f"section {i}", 0.9 - i / 100, chunk=i) for i in range(5)
     ])
-    monkeypatch.setattr(vectors, "report_dates", lambda paths: {})
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {report: "2026-09-28"})
 
-    hits = vectors.hybrid_search("q", [0.1], limit=5)
-    assert len(hits) <= 2, [h["snippet"] for h in hits]
+    hits = vectors.hybrid_search("本轮 P7 判定了哪些高优先级机会？", [0.1], limit=4)
+    assert len(hits) == 4, [h["snippet"] for h in hits]
 
 
 def test_a_heading_is_never_the_last_thing_in_a_chunk():
@@ -244,3 +253,121 @@ def test_chunking_still_covers_every_byte_of_the_document():
     chunks = vectors.chunk_text(doc)
     assert "".join(chunks).replace("\n\n", "") == doc.replace("\n\n", ""), \
         "chunking lost or duplicated text"
+
+
+# --- Which round an answer comes from -------------------------------------
+#
+# Every round writes the same nine stage reports, so a question about "the most
+# serious risk" matches a dozen copies of that section and the retriever has to
+# pick one. Measured over 31 questions, an older copy outranked the current
+# round's in 25 of them, by a median of 0.058 cosine -- a systematic bias, since
+# newer reports are longer and denser and a section's opening chunk carries more
+# material unrelated to the question.
+
+
+def test_an_answer_comes_from_the_newest_round(monkeypatch):
+    old = _series("2026-06-15")
+    new = _series("2026-09-28")
+    monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
+    monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
+        _hit(old, "last month's copy, marginally closer", 0.90, chunk=0),
+        _hit(new, "this round's answer", 0.86, chunk=4),
+    ])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        old: "2026-06-15", new: "2026-09-28",
+    })
+
+    hits = vectors.hybrid_search("q", [0.1], limit=1,
+                                 recency_weight=0.25, half_life_days=30)
+    assert hits[0]["snippet"] == "this round's answer", hits[0]["snippet"]
+
+
+def test_scope_zero_searches_the_whole_archive(monkeypatch):
+    old = _series("2026-06-15")
+    monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
+    monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
+        _hit(old, "the only copy anywhere", 0.9, chunk=0),
+    ])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        old: "2026-06-15",
+    })
+
+    hits = vectors.hybrid_search("q", [0.1], limit=3, round_scope=0)
+    assert [h["snippet"] for h in hits] == ["the only copy anywhere"]
+
+
+def test_the_scope_widens_rather_than_returning_nothing(monkeypatch):
+    """A brand new pipeline may have one round and a question may need history.
+
+    The three candidates are deliberately different files: with one filename the
+    per-source cap would trim them first and this would measure that instead.
+    """
+    days = ["2026-09-28", "2026-09-27", "2026-09-26"]
+    names = ["07_product_content_opportunities.md", "08_risk_and_alternatives.md",
+             "09_executive_synthesis_and_actions.md"]
+    monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
+    monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
+        _hit(_series(d, name), f"material from {d}", 0.9 - i / 100, chunk=i)
+        for i, (d, name) in enumerate(zip(days, names))
+    ])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        _series(d, name): d for d, name in zip(days, names)
+    })
+
+    hits = vectors.hybrid_search("q", [0.1], limit=3, round_scope=1)
+    assert len(hits) == 3, "the newest round alone should have widened the search"
+    assert {h["path"] for h in hits} == {
+        _series(d, name) for d, name in zip(days, names)}
+
+
+def test_a_question_naming_a_date_can_reach_the_archive(monkeypatch):
+    """Dropping the scope means "stop restricting", not "prefer the oldest".
+
+    The old copy here scores higher on relevance than either current one, which
+    is the situation measured on the real corpus: in 25 of 31 questions an older
+    copy of the right section outranked the current round's. A question about the
+    present ignores it; a question that names June is allowed to consider it.
+    """
+    old = _series("2026-06-15", "08_risk_and_alternatives.md")
+    new_a = _series("2026-09-28", "09_executive_synthesis_and_actions.md")
+    new_b = _series("2026-09-28", "07_product_content_opportunities.md")
+    candidates = [_hit(old, "the June answer", 0.90, chunk=0),
+                  _hit(new_a, "today's answer, first half", 0.70, chunk=4),
+                  _hit(new_b, "today's answer, second half", 0.68, chunk=2)]
+    monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
+    monkeypatch.setattr(vectors, "semantic_search", lambda v, n: candidates)
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {
+        old: "2026-06-15", new_a: "2026-09-28", new_b: "2026-09-28",
+    })
+    args = dict(limit=2, recency_weight=0.25, half_life_days=30, round_scope=1)
+
+    scoped = vectors.hybrid_search("本轮最严重的风险是什么？", [0.1], **args)
+    assert {h["path"] for h in scoped} == {new_a, new_b}, \
+        "a question about the present must not be answered from June"
+
+    archive = vectors.hybrid_search("6 月那次评测的结论是什么？", [0.1], **args)
+    assert "the June answer" in {h["snippet"] for h in archive}, \
+        "a question that names a month must be able to reach that month"
+
+
+def test_the_scope_leaves_candidates_alone_when_there_is_no_date(monkeypatch):
+    """A pipeline's only round must not scope itself out of existence."""
+    only = _series("2026-09-28", "08_risk_and_alternatives.md")
+    monkeypatch.setattr(vectors.index_db, "search_reports", lambda q, n: [])
+    monkeypatch.setattr(vectors, "semantic_search", lambda v, n: [
+        _hit(only, "the only round", 0.9, chunk=0)])
+    monkeypatch.setattr(vectors, "report_dates", lambda paths: {only: "2026-09-28"})
+
+    assert vectors.hybrid_search("本轮最严重的风险是什么？", [0.1], limit=1,
+                                 round_scope=1)
+
+
+def test_ordinary_questions_do_not_read_as_archive_questions():
+    for q in ("本轮最严重的风险是什么？", "哪些模型值得实测？", "P7 判定为 P0 的内容机会有哪几项？"):
+        assert not vectors._names_another_round(q), q
+
+
+def test_archive_cues_are_recognised():
+    for q in ("6 月那次评测的结论是什么？", "2026-06-15 那天呢？", "去年做过什么工具横评？",
+              "上个月的价格变化", "历史上有没有类似情况？"):
+        assert vectors._names_another_round(q), q
