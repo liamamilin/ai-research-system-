@@ -43,7 +43,10 @@ prompt: |
   12. Emerging alternatives
 
   Input: the radar documents from this round (P1-P6). 流水线已把它们全文附在下方
-  「本轮上游文档」一节里，直接基于它们分析，不要再用 read_file 去找这些文件。
+  「本轮上游文档」一节里，直接基于它们分析，不要把同样的内容重新搜一遍。
+  篇幅超长的上游文档只给了开头和结尾，中间用「省略了约 N 字符」标出；
+  如果某个被省略的章节对你的输出必需，用 read_file 精确读取提示里给出的那个路径，
+  不要通读整份、也不要逐个文件重读。
 
   {upstream_reports}
 

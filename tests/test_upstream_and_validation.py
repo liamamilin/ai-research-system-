@@ -9,7 +9,9 @@ read.
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
+from pathlib import Path
 
 import pytest
 
@@ -27,6 +29,148 @@ def round_dir(tmp_path):
         (root / filename).write_text(
             f"# {key}\n\n" + f"内容 {key}。" * 400, encoding="utf-8")
     return str(root)
+
+
+# --- which 60k of a 32k radar the synthesis stage actually gets ---------------
+
+def _radar(sections: dict[str, int]) -> str:
+    """A radar-shaped document: preamble plus top-level sections of given sizes."""
+    parts = ["# 雷达\n\n前言。\n"]
+    for heading, size in sections.items():
+        parts.append(f"\n## {heading}\n\n" + ("内容" * (size // 2)))
+    return "\n".join(parts)
+
+
+def test_the_tail_of_a_radar_survives_the_budget():
+    """The sections a synthesis stage is told to use live at the end.
+
+    P7's prompt asks for "Plan comparisons", "Tool recommendations" and
+    "Ignore / Not Worth Content"; P1's radar answers those in sections 2, 3
+    and 7. Truncating at the head handed P7 the opening nine items and none of
+    them, which is the worst possible trade for a 32k document and a 10k share.
+    """
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({
+        "1. 高信号更新": 18000,
+        "2. 对比表": 6000,
+        "3. 详细分析": 5000,
+        "4. 定价说明": 2000,
+        "5. 路由影响": 1500,
+        "6. Test Candidates": 1200,
+        "7. Ignore / Low-Signal Items": 800,
+    })
+    out = _select_sections(text, 10000, path="radar.md")
+
+    assert len(out) <= 10400, f"over budget: {len(out)}"
+    assert "## 7. Ignore / Low-Signal Items" in out
+    assert "## 6. Test Candidates" in out
+    assert "前言" in out
+    # And it must say what it dropped, with a route to the original.
+    assert "省略了约" in out
+    assert "radar.md" in out
+
+
+def test_the_result_never_exceeds_the_share():
+    """The preamble and the omission note are emitted outside the section
+    budget, so they have to be subtracted from it. P7 came out at 10,313
+    against a 10,000 share before this was accounted for."""
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({"1. 开篇": 26000, "2. 中段": 6000, "3. 收尾": 3000})
+    for limit in (4000, 6000, 10000):
+        out = _select_sections(text, limit, path="radar.md")
+        assert len(out) <= limit, f"limit {limit} produced {len(out)}"
+
+
+def test_a_short_enough_document_is_handed_over_whole():
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({"1. 更新": 2000, "2. 对比表": 1500})
+    out = _select_sections(text, 10000, path="radar.md")
+    assert out == text
+    assert "省略" not in out
+
+
+def test_an_oversized_first_section_is_clipped_not_dropped():
+    """One huge opening section must not starve the whole budget.
+
+    The first cut of this walked sections and stopped at the first one too big
+    to fit, which on the real P1 produced 4,036 characters out of a 10,000
+    budget -- a third of what head-truncation had managed, with the framing
+    gone too.
+    """
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({"1. 巨大的开篇": 30000, "2. 中段": 6000, "3. 收尾": 3000})
+    out = _select_sections(text, 10000, path="radar.md")
+
+    assert "## 1. 巨大的开篇" in out, "the opening section was dropped"
+    assert "## 3. 收尾" in out, "the tail was dropped"
+    # Not 10,000: the 6k middle section cannot fit the ~900 characters left
+    # after the opening is clipped, and half a section is worse than none.
+    assert len(out) > 8500, f"only {len(out)} of 10000 used"
+    assert len(out) <= 10400, f"over budget: {len(out)}"
+
+
+def test_a_two_section_document_keeps_both_even_if_the_budget_is_not_full():
+    """Two sections is the floor: once the first is clipped there is nothing
+    left to take, so the share is not filled. Documented rather than papered
+    over -- an unfilled budget is better than a cut section."""
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({"1. 巨大的开篇": 30000, "2. 收尾": 2000})
+    out = _select_sections(text, 10000, path="radar.md")
+
+    assert "## 1. 巨大的开篇" in out
+    assert "## 2. 收尾" in out
+    assert len(out) > 6000
+
+
+def test_selection_keeps_sections_in_reading_order():
+    from web.runner.pipeline import _select_sections
+
+    text = _radar({"1. 甲": 4000, "2. 乙": 4000, "3. 丙": 4000, "4. 丁": 4000})
+    out = _select_sections(text, 10000, path="radar.md")
+    headings = [line for line in out.splitlines() if line.startswith("## ")]
+    assert headings, "nothing was kept"
+    numbers = [int(h[3]) for h in headings]
+    assert numbers == sorted(numbers), f"out of order: {headings}"
+
+
+def test_an_unstructured_document_keeps_both_ends():
+    from web.runner.pipeline import _select_sections
+
+    text = ("开头标记。" + "填充" * 6000 + "结尾标记。")
+    out = _select_sections(text, 4000, path="plain.md")
+    assert "开头标记" in out
+    assert "结尾标记" in out
+    assert "省略了约" in out
+    assert len(out) <= 4400
+
+
+def test_the_budget_is_never_silently_spent_on_a_prefix():
+    """The share is 60k/6; P1 is 32k. Whatever is dropped, most of the share
+    has to be filled -- otherwise the stage is handed a fragment and told it
+    received the full document."""
+    from web.runner.pipeline import _select_sections
+
+    root = Path(os.path.dirname(os.path.abspath(__file__))).parent
+    real = root / "output" / "practical_ai_intelligence"
+    versions = sorted(p for p in real.glob("2026-*") if p.is_dir()) if real.is_dir() else []
+    if not versions:
+        pytest.skip("no round output on this machine")
+    radar = versions[-1] / "01_model_and_pricing_radar.md"
+    if not radar.is_file():
+        pytest.skip("this round has no P1")
+
+    original = radar.read_text(encoding="utf-8")
+    if len(original) < 15000:
+        pytest.skip("radar too small to be truncated")
+
+    share = 60000 // 6
+    out = _select_sections(original, share, path="p1.md")
+    assert len(out) > share * 0.85, f"only used {len(out)} of {share}"
 
 
 # --- upstream collection -----------------------------------------------------
@@ -99,7 +243,7 @@ def test_injection_respects_a_length_budget(tmp_path):
     text, _notes = collect_upstream("07_product_content_opportunities", str(root))
     assert len(text) <= UPSTREAM_CHAR_BUDGET + 5000
     # Truncation is stated where the reader hits it, not only in a summary.
-    assert "已截断" in text
+    assert "省略了约" in text
     # And the budget is shared, so no radar is dropped entirely.
     for key in STAGES[1:7]:
         assert _STAGE_FILE[key[0]] in text, key[0]
@@ -112,7 +256,7 @@ def test_truncation_is_declared_inside_the_text(tmp_path):
     for key, filename, _label in STAGES:
         (root / filename).write_text(f"# {key}\n\n" + "y" * 50000, encoding="utf-8")
     text, _ = collect_upstream("07_product_content_opportunities", str(root))
-    assert "已截断" in text
+    assert "省略了约" in text
 
 
 # --- the prompt actually receives it -----------------------------------------

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -85,6 +86,126 @@ _STAGE_LABEL = {key: label for key, _, label in STAGES}
 UPSTREAM_CHAR_BUDGET = 60000
 _UPSTREAM_MIN_CHARS = 2000
 
+# Markdown heading that starts a top-level section. Radars are built from these,
+# which is what makes it possible to keep sections whole.
+_SECTION_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+
+
+def _split_sections(text: str) -> tuple[str, list[str]]:
+    """Split into (preamble, [section, ...]) on top-level ``##`` headings."""
+    starts = [m.start() for m in _SECTION_RE.finditer(text)]
+    if not starts:
+        return text, []
+    preamble = text[:starts[0]]
+    bounds = starts + [len(text)]
+    return preamble, [text[bounds[i]:bounds[i + 1]] for i in range(len(starts))]
+
+
+def _clip(text: str, limit: int) -> str:
+    """Keep both ends of a single oversized section."""
+    if len(text) <= limit:
+        return text
+    marker = "\n\n…（本节中间省略）…\n\n"
+    room = max(2, limit - len(marker))
+    head = max(1, int(room * 0.65))
+    tail = room - head
+    if tail <= 0:
+        return text[:limit]
+    return text[:head] + marker + text[-tail:]
+
+
+def _select_sections(text: str, limit: int, path: str = "") -> str:
+    """Fit ``text`` into ``limit`` characters, keeping whole sections from both ends.
+
+    Truncating at the head is the wrong end. A radar opens with framing and
+    high-signal items and closes with the comparison table, the per-tool
+    breakdown and the low-signal list -- and the synthesis stages are told
+    precisely to use those: P7's prompt asks for "Plan comparisons", "Tool
+    recommendations" and "Ignore / Not Worth Content". At the 10k-per-dependency
+    share, P1 kept sections 1.1-1.9 and lost 2-7, so P7 was handed the framing
+    and none of the material it was told to build on.
+
+    The size is deliberate -- upstream is 40% of research.context_char_budget --
+    so the question is only which 60k, and the answer is: the front and the back,
+    never a head prefix. A section too large for the room left is clipped rather
+    than dropped, because a radar's opening section is usually the point, and
+    skipping it outright once wasted 88% of the budget.
+    """
+    if len(text) <= limit:
+        return text
+
+    where = path or "上游文档对应文件"
+    preamble, sections = _split_sections(text)
+    # The preamble and the omission note are both emitted outside the section
+    # budget, so both have to come out of it or the result overruns the share.
+    budget = max(400, limit - _NOTE_ALLOWANCE - len(preamble))
+    if not sections:
+        # No headings to preserve. Keep both ends anyway; the tail of an
+        # unstructured document is still more useful than nothing.
+        head = max(1, int(budget * 0.65))
+        tail = budget - head
+        if tail <= 0:
+            return text[:limit]
+        return (text[:head]
+                + _OMITTED_NOTE.format(omitted=len(text) - head - tail, path=where)
+                + text[-tail:])
+
+    # Front gets a slight majority: the opening usually states the round's scope
+    # and the highest-signal items, which the later sections refer back to.
+    head_budget = int(budget * 0.6)
+    taken: set[int] = set()
+    head_parts: list[str] = []
+    for index, section in enumerate(sections):
+        used = sum(len(p) for p in head_parts)
+        room = head_budget - used
+        if room <= 0:
+            break
+        if len(section) <= room:
+            head_parts.append(section)
+        else:
+            # Too big for the room left: clip it rather than drop it. A radar's
+            # opening section is usually the point, and skipping it outright
+            # once left 88% of the budget unspent.
+            head_parts.append(_clip(section, room))
+            taken.add(index)
+            break
+        taken.add(index)
+
+    # Then whole sections from the back, kept in their original order. A section
+    # that does not fit is skipped rather than ending the walk: one large
+    # middle section used to block every smaller section behind it, leaving a
+    # tenth of the share unspent.
+    tail_parts: list[str] = []
+    for index in range(len(sections) - 1, -1, -1):
+        if index in taken:
+            break
+        used = sum(len(p) for p in head_parts + tail_parts)
+        room = budget - used
+        if room <= 0:
+            break
+        section = sections[index]
+        if len(section) > room:
+            continue
+        tail_parts.insert(0, section)
+        taken.add(index)
+
+    kept = sum(len(p) for p in head_parts + tail_parts)
+    omitted = len(text) - len(preamble) - kept
+    parts = ([preamble] if preamble.strip() else []) + head_parts
+    if omitted > 0:
+        parts.append(_OMITTED_NOTE.format(omitted=omitted, path=where))
+    parts.extend(tail_parts)
+    return "\n\n".join(parts)
+
+
+_OMITTED_NOTE = (
+    "\n\n（本节中间省略了约 {omitted} 字符：为了控制上下文长度，"
+    "这里只保留了本文件的开头与结尾。完整原文见 {path}。）\n\n"
+)
+# Worst-case rendered length of _OMITTED_NOTE with a realistic path, reserved up
+# front so the result still honours the caller's limit.
+_NOTE_ALLOWANCE = 240
+
 
 def collect_upstream(key: str, round_dir: str) -> tuple[str, list[str]]:
     """Gather the documents ``key`` depends on, as (text, notes).
@@ -118,10 +239,14 @@ def collect_upstream(key: str, round_dir: str) -> tuple[str, list[str]]:
             notes.append(f"- {_STAGE_LABEL.get(dep, dep)}：内容过短"
                          f"（{len(text)} 字符），已忽略。")
             continue
+        original_len = len(text)
         if len(text) > share:
-            text = text[:share] + f"\n\n（本节已截断，原文 {len(text)} 字符）"
+            text = _select_sections(
+                text, share,
+                path=f"output/{PIPELINE_DIR}/{os.path.basename(round_dir)}/{_STAGE_FILE[dep]}")
         blocks.append(
-            f"### {_STAGE_LABEL.get(dep, dep)}（{_STAGE_FILE[dep]}）\n\n{text}"
+            f"### {_STAGE_LABEL.get(dep, dep)}（{_STAGE_FILE[dep]}，原文 {original_len} 字符）"
+            f"\n\n{text}"
         )
 
     if not blocks:
