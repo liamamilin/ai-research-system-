@@ -94,7 +94,11 @@ prompt: |
 
   ## 9. Watchlist
 
+  Table: topic, trigger signal, why watch it, check-by date, source URL.
+
   ## 10. Ignored Themes
+
+  Table: topic, why ignored, what would change that.
 
   请用中文输出完整报告。
 output: "output/practical_ai_intelligence/{date}/09_executive_synthesis_and_actions.md"

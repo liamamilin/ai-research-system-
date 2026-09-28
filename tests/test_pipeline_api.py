@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+from core import artifacts
+
 
 def _login(client):
     return client.post("/api/auth/login",
@@ -34,6 +38,67 @@ def test_round_detail_exposes_artifacts(client, web_env):
     r = client.get("/api/pipeline/rounds/2026-01-02")
     assert r.status_code == 200
     assert r.json()["artifacts"][0]["name"] == "action_items.json"
+
+
+def _seed_damaged_round(web_env) -> None:
+    """A round that finished 10/10 and still lost its watchlist."""
+    tmp_path, _ = web_env
+    round_dir = tmp_path / "output" / "practical_ai_intelligence" / "2026-01-03"
+    round_dir.mkdir(parents=True)
+    body = ("# 报告\n\n## 9. Watchlist\n\n"
+            + "x" * 5000
+            + "\n1. **该被解析出来的观察项**：值得盯（https://a.test/x ）。\n")
+    (round_dir / "09_executive_synthesis_and_actions.md").write_text(body, encoding="utf-8")
+    (round_dir / artifacts.WATCHLIST_FILE).write_text(json.dumps({
+        "items": [],
+        "warnings": ["watchlist: P9 文档中未解析出任何观察项（检查章节标题与表格结构）"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_an_empty_watchlist_is_flagged_in_the_round_list(client, web_env):
+    """A 285-byte watchlist used to look exactly like a 10 KB one.
+
+    Nothing in the list said the round was incomplete, and the warning that
+    knew better was buried inside the JSON the page offered to download.
+    """
+    _seed_damaged_round(web_env)
+    _login(client)
+    rounds = {x["date"]: x for x in client.get("/api/pipeline/rounds").json()["rounds"]}
+    watch = next(a for a in rounds["2026-01-03"]["artifacts"]
+                 if a["name"] == artifacts.WATCHLIST_FILE)
+    assert watch.get("empty") is True
+    assert any("很可能未能解析" in w for w in watch["warnings"]), watch
+
+
+def test_round_detail_reports_artifact_warnings(client, web_env):
+    _seed_damaged_round(web_env)
+    _login(client)
+    payload = client.get("/api/pipeline/rounds/2026-01-03").json()
+    assert payload["warnings"], payload
+    assert any("重新解析" in w for w in payload["warnings"]), payload["warnings"]
+
+
+def test_the_list_does_not_pay_for_the_warning_reparse(client, web_env):
+    """Warnings on the list come from the small JSON files only.
+
+    The detail endpoint re-reads the round's documents, which is megabytes per
+    round; doing that for every row of the list would make the page unusable.
+    """
+    _seed_damaged_round(web_env)
+    _login(client)
+    for row in client.get("/api/pipeline/rounds").json()["rounds"]:
+        assert "warnings" not in row, row
+
+
+def test_a_healthy_artifact_is_not_flagged(client, web_env):
+    _seed_round(web_env)
+    _login(client)
+    rounds = {x["date"]: x for x in client.get("/api/pipeline/rounds").json()["rounds"]}
+    action = rounds["2026-01-02"]["artifacts"][0]
+    # Emptiness alone is not a defect -- a round can genuinely have no actions,
+    # and the page flags on warnings, not on size.
+    assert "warnings" not in action
+    assert action.get("empty") is True
 
 
 def test_raw_json_artifact_download(client, web_env):

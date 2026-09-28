@@ -78,6 +78,87 @@ def test_parse_watchlist_extracts_rows():
     assert "https://openai.com/products/release-notes/" in items[0]["evidence"]
 
 
+def test_a_watchlist_written_as_a_list_is_still_read():
+    """The one section with no `Table:` spec got written as a list.
+
+    `## 9. Watchlist` is the only output section in the P9 prompt that never
+    said "Table:", so the model used a numbered list -- and a table-only parser
+    returned nothing. The 2026-09-26 round produced an empty watchlist.json of
+    285 bytes next to 11 perfectly good items in the document.
+    """
+    listed = """# Executive Synthesis
+
+## 9. Watchlist
+
+**窗口内、需在未来 1–2 周跟进**
+1. **OpenAI 越权事件的监管后果**：澳大利亚已启动紧急审查（https://a.test/review ，2026-09-24）；后续可能出台强制披露时限。
+2. **SWE-Bench Pro V2 的 HARD-51 子集**：是否成为行业默认难集（https://b.test/bench ）。
+3. 没有粗体的条目也应被收进来，https://c.test/plain
+"""
+    parsed = artifacts.parse_watchlist(listed)
+    items = parsed["items"]
+    assert parsed["warnings"] == [], parsed["warnings"]
+    assert len(items) == 3, items
+    assert items[0]["topic"] == "OpenAI 越权事件的监管后果"
+    assert items[0]["evidence"] == "https://a.test/review"
+    # The brackets that wrapped the URL must not be left dangling or empty.
+    point = items[0]["watch_point"]
+    assert "（）" not in point and "( )" not in point
+    assert "，2026-09-24" not in point, point
+    assert "澳大利亚已启动紧急审查" in point
+    assert items[1]["topic"] == "SWE-Bench Pro V2 的 HARD-51 子集"
+    assert items[2]["topic"], items[2]
+
+
+def test_a_table_watchlist_still_wins_over_the_list_fallback():
+    """A prompt that does specify a table must not be re-parsed as a list."""
+    parsed = artifacts.parse_watchlist(P9)
+    assert parsed["warnings"] == []
+    assert len(parsed["items"]) == 1
+    assert parsed["items"][0]["topic"] == "GPT-5.5 退役"
+
+
+def test_an_empty_stored_watchlist_does_not_outrank_its_own_document(tmp_path):
+    """Every round written by the old parser has an empty watchlist.json on disk
+    forever, and it used to win over the document it was derived from."""
+    round_dir = tmp_path / "2026-01-02"
+    round_dir.mkdir()
+    (round_dir / "09_executive_synthesis_and_actions.md").write_text(
+        "# 报告\n\n## 9. Watchlist\n\n"
+        "1. **应该被解析出来的观察项**：值得盯（https://a.test/x ）。\n",
+        encoding="utf-8",
+    )
+    (round_dir / artifacts.WATCHLIST_FILE).write_text(json.dumps({
+        "schema_version": 2,
+        "items": [],
+        "warnings": ["watchlist: P9 文档中未解析出任何观察项（检查章节标题与表格结构）"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    payloads = artifacts.load_round_payloads(str(round_dir))
+    items = payloads["watchlist"]["items"]
+    assert len(items) == 1, items
+    assert items[0]["topic"] == "应该被解析出来的观察项"
+    # The discarded file's own "parsed nothing" claim is exactly what we just
+    # disproved, so it must not survive alongside the items it contradicts.
+    joined = " ".join(payloads["watchlist"]["warnings"])
+    assert "未解析出任何观察项" not in joined, joined
+    assert "重新解析" in joined
+
+
+def test_a_genuinely_empty_watchlist_is_left_alone(tmp_path):
+    """No items in the file and none in the document is a quiet round, not a bug."""
+    round_dir = tmp_path / "2026-01-03"
+    round_dir.mkdir()
+    (round_dir / "09_executive_synthesis_and_actions.md").write_text(
+        "# 报告\n\n## 9. Watchlist\n\n本期无需观察项。\n", encoding="utf-8")
+    (round_dir / artifacts.WATCHLIST_FILE).write_text(
+        json.dumps({"items": []}, ensure_ascii=False), encoding="utf-8")
+
+    payloads = artifacts.load_round_payloads(str(round_dir))
+    assert payloads["watchlist"]["items"] == []
+    assert "重新解析" not in " ".join(payloads["watchlist"]["warnings"])
+
+
 def test_extract_sources_dedupes_and_strips_punctuation():
     text = (
         "见 https://a.test/x）以及 https://a.test/x ，"

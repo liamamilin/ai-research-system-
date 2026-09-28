@@ -247,6 +247,71 @@ def canonicalize_rows(rows: list, primary: str, warnings: list[str],
     return clean_rows
 
 
+_LIST_ITEM_RE = re.compile(r"^\s*(?:\d+\s*[.)]|[-*+])\s+(.*)$")
+_LEADING_INDEX_RE = re.compile(r"^\**\s*(?:\d+[.)]\s*)?\**")
+_URL_IN_TEXT_RE = re.compile(r"https?://[^\s<>()\[\]，。；：、）】]+")
+
+
+def _parse_list(section: str) -> list[dict]:
+    """Parse a numbered or bulleted list into row dicts.
+
+    Sections whose format the prompt leaves open get written as a list, and a
+    table-only parser then returned nothing at all. The 2026-09-26 round is
+    the case in point: P9 wrote 11 substantive watchlist items as a numbered
+    list, ``## 9. Watchlist`` was the one section with no ``Table:`` spec, and
+    the artifact came out empty with a warning that reached no screen.
+
+    The shape of a list carries less structure than a table, so this recovers
+    what it can and no more: the bold lead becomes the topic, the first URL
+    becomes the evidence, and the remaining prose becomes the observation.
+    """
+    rows: list[dict] = []
+    for raw in (section or "").splitlines():
+        match = _LIST_ITEM_RE.match(raw)
+        if not match:
+            continue
+        body = match.group(1).strip()
+        if not body:
+            continue
+        bold = re.match(r"^\*\*(.+?)\*\*", body)
+        if bold:
+            topic = bold.group(1).strip()
+            rest = body[bold.end():].lstrip("：:，,、 -")
+        else:
+            topic = ""
+            rest = body
+        if not topic:
+            # No bold lead: take up to the first separator, else the first
+            # clause, and keep it short enough to stay a title.
+            head = re.split(r"[：:，,。]|https?://", body, maxsplit=1)[0].strip()
+            topic = _LEADING_INDEX_RE.sub("", head)[:80]
+            rest = body[len(head):].lstrip("：:，,、 -")
+        url = _URL_IN_TEXT_RE.search(rest)
+        row = {"topic": topic}
+        if url:
+            row["evidence"] = url.group(0).rstrip(".,;")
+        detail = _URL_IN_TEXT_RE.sub("", rest).strip()
+        # Taking the URL out leaves the brackets that wrapped it behind, so
+        # "(url，2026-09-24)" becomes "（ ，2026-09-24）" otherwise.
+        detail = re.sub(r"[（(]\s*[，,；;]?\s*[）)]", "", detail)
+        detail = re.sub(r"[（(]\s*[，,；;]\s*", "（", detail)
+        detail = re.sub(r"\s{2,}", " ", detail).strip(" ，,、；;：:")
+        if len(detail) > 12:
+            row["watch_point"] = detail[:400]
+        if not row.get("topic") and not row.get("watch_point"):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _parse_items(section: str) -> list[dict]:
+    """Rows from a section, accepting either a table or a list."""
+    rows = _parse_table(section)
+    if rows:
+        return rows
+    return _parse_list(section)
+
+
 def parse_action_items(p9_text: str) -> dict:
     """Extract immediate actions and this-week tests from a P9 report."""
     warnings: list[str] = []
@@ -268,7 +333,7 @@ def parse_watchlist(p9_text: str) -> dict:
     warnings: list[str] = []
     section = _find_section(p9_text, "观察清单", "Watchlist")
     items = canonicalize_rows(
-        [_map_row(r, warnings, "watchlist") for r in _parse_table(section)],
+        [_map_row(r, warnings, "watchlist") for r in _parse_items(section)],
         "topic", warnings, "watchlist")
     if p9_text and not items:
         warnings.append("watchlist: P9 文档中未解析出任何观察项（检查章节标题与表格结构）")
@@ -346,10 +411,22 @@ def load_round_payloads(round_dir: str) -> Optional[dict]:
         action_warnings = parsed["warnings"]
     watchlist = _read_json(watchlist_path)
     watch_items, watch_warnings = normalize_payload_watchlist(watchlist)
-    if watchlist_path and not os.path.isfile(watchlist_path) and p9_text:
+    # Prefer the stored artifact, but not blindly: an empty one is
+    # indistinguishable from a round that genuinely had nothing to watch, and
+    # every round written by the table-only parser has an empty one on disk
+    # forever. Re-derive from the document when the file is missing *or* empty,
+    # and say so, so a stale artifact cannot quietly outrank its own source.
+    if p9_text and not watch_items:
         parsed_watch = parse_watchlist(p9_text)
-        watch_items = parsed_watch["items"]
-        watch_warnings = parsed_watch["warnings"]
+        if parsed_watch["items"]:
+            # Replace the discarded file's warnings rather than adding to them:
+            # its "parsed nothing" line is exactly the claim we just disproved.
+            watch_warnings = list(parsed_watch["warnings"])
+            if watchlist is not None:
+                watch_warnings.insert(0, (
+                    "watchlist: 已忽略磁盘上为空的 watchlist.json，改从 P9 文档"
+                    "重新解析（该文件由旧版解析器生成，只认表格）"))
+            watch_items = parsed_watch["items"]
     sources = _read_json(sources_path)
     if sources is None:
         urls: list[str] = []

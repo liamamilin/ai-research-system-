@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime
@@ -19,24 +20,61 @@ router = APIRouter(prefix="/api/pipeline", tags=["pipeline"])
 
 
 def _round_artifacts(date: str, output_dir: str) -> list[dict]:
-    """Existing JSON artifacts of a round (name + size), for downloads."""
+    """Existing JSON artifacts of a round (name, size, and what they complain about).
+
+    Reads only the artifacts themselves -- a few KB each -- because this runs
+    for every round in the list. Re-parsing the round's markdown here would
+    mean megabytes per page load, and the warnings are already recorded inside
+    the files.
+    """
     round_dir = os.path.join(output_dir, pipeline.PIPELINE_DIR, date)
     found = []
     for name in (artifacts.ACTION_FILE, artifacts.WATCHLIST_FILE, artifacts.SOURCES_FILE):
         path = os.path.join(round_dir, name)
-        if os.path.isfile(path):
-            found.append({"name": name, "size": os.path.getsize(path)})
+        if not os.path.isfile(path):
+            continue
+        entry: dict = {"name": name, "size": os.path.getsize(path)}
+        warnings, count = _artifact_complaints(path, name, round_dir)
+        if warnings:
+            entry["warnings"] = warnings
+        if count == 0:
+            entry["empty"] = True
+        found.append(entry)
     return found
 
 
-def _round_payload(date: str) -> dict:
+def _artifact_complaints(path: str, name: str, round_dir: str) -> tuple[list[str], int]:
+    """(warnings, item count) for one artifact, without parsing the documents."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return [], 0
+    if not isinstance(payload, dict):
+        return [], 0
+    warnings = [str(w) for w in (payload.get("warnings") or [])]
+    if name == artifacts.WATCHLIST_FILE:
+        count = len(payload.get("items") or [])
+        source = os.path.join(round_dir, "09_executive_synthesis_and_actions.md")
+        # An empty watchlist next to a substantial P9 is a lost artifact, not a
+        # quiet round. Say so rather than shipping a 285-byte button.
+        if count == 0 and os.path.isfile(source) and os.path.getsize(source) > 4000:
+            warnings.append("watchlist 为空，但本轮 P9 文档有实质内容，观察项很可能未能解析")
+    elif name == artifacts.ACTION_FILE:
+        count = len(payload.get("actions") or []) + len(payload.get("tests") or [])
+    else:
+        count = len(payload.get("sources") or [])
+    return warnings, count
+
+
+def _round_payload(date: str, with_warnings: bool = False) -> dict:
     settings = get_settings()
     stages = pipeline.build_round_files(date, settings.paths.output_dir)
     tokens = report_meta.round_tokens(date)
     for stage in stages:
         stage["tokens"] = tokens.get(stage["key"], 0)
     done = sum(1 for s in stages if s["exists"])
-    return {
+    payload = {
         "date": date,
         "done": done,
         "total": len(stages),
@@ -45,6 +83,33 @@ def _round_payload(date: str) -> dict:
         "artifacts": _round_artifacts(date, settings.paths.output_dir),
         "live": pipeline.get_round_state(date),
     }
+    if with_warnings:
+        payload["warnings"] = _round_artifact_warnings(
+            date, settings.paths.output_dir)
+    return payload
+
+
+def _round_artifact_warnings(date: str, output_dir: str) -> list[str]:
+    """What the round's own artifacts say about themselves.
+
+    A round can finish 10/10 and still have lost its watchlist: on 2026-09-26
+    P9 wrote 11 watchlist items as a numbered list, the parser only accepted
+    tables, and the artifact came out empty. The warning existed in the JSON
+    the whole time and reached no screen, so the page showed a healthy round
+    with a 285-byte watchlist button on it. Off by default because it re-reads
+    every document in the round.
+    """
+    round_dir = os.path.join(output_dir, pipeline.PIPELINE_DIR, date)
+    payloads = artifacts.load_round_payloads(round_dir)
+    if not payloads:
+        return []
+    warnings: list[str] = []
+    for section in ("actions", "watchlist"):
+        for warning in (payloads.get(section) or {}).get("warnings") or []:
+            text = str(warning)
+            if text not in warnings:
+                warnings.append(text)
+    return warnings
 
 
 @router.get("/rounds")
@@ -87,7 +152,7 @@ def get_round(date: str, user=Depends(require_viewer)):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=ApiError.make("invalid_date", "日期格式应为 YYYY-MM-DD"),
         )
-    return _round_payload(date)
+    return _round_payload(date, with_warnings=True)
 
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
