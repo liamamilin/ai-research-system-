@@ -284,46 +284,116 @@ def _apply_recency(hits: list[dict], dates: dict[str, str],
 
 def hybrid_search(query: str, query_vector: Optional[list[float]], limit: int = 8,
                   recency_weight: float = 0.0, half_life_days: float = 30.0,
-                  overfetch: int = 3) -> list[dict]:
-    """Merge FTS5 hits with semantic hits (path-level dedupe).
+                  overfetch: int = 3, max_chunks_per_report: int = 2) -> list[dict]:
+    """Merge FTS5 recall with chunk-level precision.
 
     ``recency_weight`` trades relevance against freshness: at 0 the ranking is
     pure relevance, at 0.25 a report one half-life newer gains a quarter of a
     relevance point. The candidate pool is overfetched so a fresher report that
     BM25 ranked low can still surface.
-    """
-    merged: dict[str, dict] = {}
-    pool = max(1, overfetch) * limit
 
-    for hit in index_db.search_reports(query, pool):
-        merged[hit["path"]] = {
+    The merge used to be keyed by report path, which quietly destroyed the
+    chunk index. ``reports_fts`` holds one row per report, so its snippet is a
+    window around the document's *first* match -- and a report's opening block is
+    its header, which is exactly what a question mentioning the stage name
+    matches. Meanwhile the chunk hits were collapsed to one per path and lost.
+    The net effect was that Q&A could not cite the passage that answered the
+    question: asked which opportunities P7 ranked P0, it was handed six
+    front-matter blocks and said so, correctly, twice.
+
+    So candidates are now chunks. A report matched by FTS borrows the best
+    matching chunk of its own text as the snippet, and a report that genuinely
+    has nothing relevant keeps its FTS window rather than being dropped.
+    """
+    pool = max(1, overfetch) * limit
+    fts_hits = index_db.search_reports(query, pool)
+    chunk_hits = semantic_search(query_vector or [], pool * 2)
+
+    # Best chunk per report, for the FTS hits to quote.
+    best_chunk: dict[str, dict] = {}
+    for hit in chunk_hits:
+        best_chunk.setdefault(hit["path"], hit)
+
+    merged: dict[tuple, dict] = {}
+    for hit in fts_hits:
+        chunk = best_chunk.get(hit["path"])
+        key = (hit["path"], chunk.get("chunk_index") if chunk else None)
+        merged[key] = {
             "path": hit["path"],
             "title": hit.get("title") or "",
-            "snippet": hit.get("snippet") or "",
+            "snippet": (chunk or hit).get("snippet") or "",
             "fts_score": hit.get("fts_score"),
-            "source": "fts",
+            "vector_score": chunk.get("score") if chunk else None,
+            "chunk_index": chunk.get("chunk_index") if chunk else None,
+            "source": "hybrid" if chunk else "fts",
         }
 
-    for hit in semantic_search(query_vector or [], pool):
-        existing = merged.get(hit["path"])
-        if existing:
-            existing["vector_score"] = hit["score"]
-            existing["snippet"] = existing.get("snippet") or hit["snippet"]
-            existing["source"] = "hybrid"
-        else:
-            merged[hit["path"]] = {
-                "path": hit["path"],
-                "title": "",
-                "snippet": hit["snippet"],
-                "vector_score": hit["score"],
-                "source": "vector",
-            }
+    per_path: dict[str, int] = {}
+    for hit in chunk_hits:
+        key = (hit["path"], hit.get("chunk_index"))
+        if key in merged:
+            per_path[hit["path"]] = per_path.get(hit["path"], 0) + 1
+            continue
+        if per_path.get(hit["path"], 0) >= max_chunks_per_report:
+            continue
+        entry = {
+            "path": hit["path"],
+            "title": "",
+            "snippet": hit["snippet"],
+            "vector_score": hit["score"],
+            "chunk_index": hit.get("chunk_index"),
+            "source": "vector",
+        }
+        # No "fts_score" key at all: _fts_relevance reads an absent key as
+        # "no keyword relevance" (0.0) and an explicit None as a LIKE hit with
+        # no BM25 (1.0). Setting it to None would credit a vector-only
+        # candidate with a perfect keyword score it never earned.
+        merged[key] = entry
+        per_path[hit["path"]] = per_path.get(hit["path"], 0) + 1
 
     ranked = list(merged.values())
     dates = report_dates(hit["path"] for hit in ranked)
     _apply_recency(ranked, dates, recency_weight, half_life_days)
     ranked.sort(key=lambda item: -item["score"])
-    return ranked[:limit]
+    return _cap_per_source(ranked, limit, max_chunks_per_report)
+
+
+def _source_name(path: str) -> str:
+    """The report's own filename, which is stable across rounds.
+
+    ``practical_ai_intelligence/2026-09-26/07_product_content_opportunities.md``
+    and the 09-25 copy of the same stage share a filename, and every round
+    writes the same ten names. So this groups a report series without needing to
+    know anything about the directory layout.
+    """
+    return (path or "").rsplit("/", 1)[-1]
+
+
+def _cap_per_source(hits: list[dict], limit: int, per_source: int) -> list[dict]:
+    """Take at most ``per_source`` hits from any one report series.
+
+    A report's opening block restates its own title, scope and inputs, so it
+    matches almost any question *about that report* while containing none of its
+    findings. With one hit per round, four dated copies of the same header ate
+    the entire context: asked which opportunities P7 ranked P0, the retriever
+    returned four front-matter blocks and the model -- correctly -- said the
+    material was insufficient. Twice.
+
+    Capping by filename forces the pool to reach other passages instead.
+    """
+    if per_source <= 0:
+        return hits[:limit]
+    used: dict[str, int] = {}
+    picked: list[dict] = []
+    for hit in hits:
+        name = _source_name(hit["path"])
+        if used.get(name, 0) >= per_source:
+            continue
+        used[name] = used.get(name, 0) + 1
+        picked.append(hit)
+        if len(picked) >= limit:
+            break
+    return picked
 
 
 def index_stats() -> dict:
