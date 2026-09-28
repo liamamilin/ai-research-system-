@@ -272,7 +272,12 @@ class StateManager:
                 for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     model_slot[key] += int(usage.get(key) or 0)
 
-                user = str(entry.get("user") or "") or "unknown"
+                # Records written before runs carried their trigger, plus any
+                # path that still does not set one. "unknown" was a true
+                # statement and a useless one: 89% of this machine's spend was
+                # filed under it, which is exactly the number the budget page
+                # exists to explain.
+                user = str(entry.get("user") or "").strip() or "未标注来源"
                 user_slot = per_user.setdefault(
                     user, {"user": user, "runs": 0, "total_tokens": 0, "searches": 0})
                 user_slot["runs"] += 1

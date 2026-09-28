@@ -174,6 +174,28 @@ def test_usage_records_user_and_external_entries(tmp_path, monkeypatch):
     assert jobs == {"job-a", "__qa__"}
 
 
+def test_usage_without_a_user_is_labelled_not_called_unknown(tmp_path, monkeypatch):
+    """A blank user must not read as a missing person.
+
+    The launchd round runs every stage through run.py, so with no user
+    recorded 81 of 91 runs on this machine landed in one bucket named
+    "unknown" -- 89% of the spend, on the page meant to explain the spend.
+    """
+    from core import state as state_mod
+
+    monkeypatch.setattr(state_mod, "_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr(state_mod, "_HISTORY_DIR", str(tmp_path / "state" / "history"))
+
+    state_mod.StateManager.update("job-a", "success", usage={"total_tokens": 100})
+    state_mod.StateManager.update("job-b", "success", usage={"total_tokens": 7},
+                                  user="scheduler")
+
+    users = {u["user"]: u["total_tokens"]
+             for u in state_mod.StateManager.get_usage_summary(days=0)["per_user"]}
+    assert "unknown" not in users
+    assert users == {"未标注来源": 100, "scheduler": 7}
+
+
 def test_usage_since_filter_excludes_older(tmp_path, monkeypatch):
     from core import state as state_mod
 
