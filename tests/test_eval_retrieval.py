@@ -105,4 +105,20 @@ def test_every_gold_marker_is_a_real_heading(eval_retrieval):
     """A marker that is not a heading would silently match body text."""
     assert len(eval_retrieval.CASES) >= 30, "the set is too small to steer on"
     assert all(filename.endswith(".md") for _, filename, _ in eval_retrieval.CASES)
-    assert all(gold.strip() for _, _, gold in eval_retrieval.CASES)
+    assert all(golds and all(g.strip() for g in golds)
+               for _, _, golds in eval_retrieval.CASES)
+
+
+def test_markers_list_every_phrasing_in_use(eval_retrieval):
+    """The model drifts between rounds, so a single phrasing goes stale.
+
+    The 2026-09-28 round wrote "最佳内容机会" and "本周测试"; the 2026-09-29
+    round wrote "顶级内容机会" and "本周应做的测试". A marker list with one
+    phrasing makes the harness refuse to score the next round, which is better
+    than a wrong number but still a broken instrument.
+    """
+    multi = [golds for _, _, golds in eval_retrieval.CASES if len(golds) > 1]
+    assert len(multi) >= 15, (
+        f"only {len(multi)} cases tolerate a rephrasing; the rest will go stale")
+    for golds in eval_retrieval.CASES and multi:
+        assert len(set(golds)) == len(golds), f"duplicate phrasing in {golds}"
