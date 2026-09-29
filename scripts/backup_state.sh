@@ -10,6 +10,16 @@
 set -euo pipefail
 
 BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Database snapshots go through the SQLite backup API, which needs an
+# interpreter. The project's own virtualenv is preferred so a snapshot is never
+# taken by a different Python than the one that will read it back.
+if [ -x "$BASE_DIR/../.AI_research/bin/python" ]; then
+    PY="$BASE_DIR/../.AI_research/bin/python"
+else
+    PY="$(command -v python3 || true)"
+fi
+
 DEST_DIR=""
 DRY_RUN=0
 WITH_INDEX=0
@@ -25,14 +35,23 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-if [ "${WITH_INDEX:-0}" -eq 1 ]; then
-    FILES+=("${DERIVED[@]}")
-fi
-
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 if [ -z "$DEST_DIR" ]; then
     DEST_DIR="$BASE_DIR/state/backups/$TIMESTAMP"
 fi
+
+# The report index is *derived*: it is rebuilt from output/**.md by
+# `python run_web.py reindex`. At 150+ MB it dominated every snapshot (14 of
+# them had reached 199 MB), so it is opt-in rather than routine.
+#
+# Both arrays are defined before the flag that reads them. That block used to
+# sit above the definitions, so `--with-index` died with
+# "DERIVED[@]: unbound variable" on the dry run and on the real run alike: the
+# largest database here could not be backed up at all, and no test mentioned
+# the flag.
+DERIVED=(
+    "state/reports.db"
+)
 
 FILES=(
     "state/users.db"
@@ -49,12 +68,10 @@ FILES=(
     "config/web.yaml"
 )
 
-# The report index is *derived*: it is rebuilt from output/**.md by
-# `python run_web.py reindex`. At 150+ MB it dominated every snapshot (14 of
-# them had reached 199 MB), so it is opt-in rather than routine.
-DERIVED=(
-    "state/reports.db"
-)
+if [ "${WITH_INDEX:-0}" -eq 1 ]; then
+    FILES+=("${DERIVED[@]}")
+fi
+
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "backup target: $DEST_DIR"
@@ -76,17 +93,74 @@ fi
 
 mkdir -p "$DEST_DIR"
 copied=0
+verify_failed=0
 for rel in "${FILES[@]}"; do
     src="$BASE_DIR/$rel"
     [ -f "$src" ] || continue
     name="$(basename "$rel")"
     case "$name" in
         *.db)
-            if command -v sqlite3 >/dev/null 2>&1 \
-               && sqlite3 "$src" ".backup '$DEST_DIR/$name'" 2>/dev/null; then
-                :
-            else
-                cp "$src" "$DEST_DIR/$name"
+            # Snapshot through the SQLite backup API rather than copying the
+            # file. Every database here is in WAL mode, and a plain `cp` of a
+            # WAL database copies the *main file only*: whatever is still in the
+            # `-wal` sidecar is not in the snapshot, so the backup opens
+            # cleanly and is quietly missing recent writes. The old code only
+            # reached `cp` when the sqlite3 CLI was missing, which is exactly
+            # the case where nobody would notice.
+            #
+            # Python is used rather than the sqlite3 CLI because the project
+            # already requires it; the CLI is an optional system tool.
+            if ! "$PY" - "$src" "$DEST_DIR/$name" <<'PYEOF'
+import sqlite3
+import sys
+
+src, dest = sys.argv[1], sys.argv[2]
+
+
+def row_counts(conn):
+    """Rows per table, so 'the snapshot opened' and 'the snapshot is whole'
+    are not mistaken for the same statement."""
+    tables = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return {t: conn.execute(f'SELECT COUNT(*) FROM "{t}"').fetchone()[0]
+            for t in tables}
+
+
+# Opened plainly, not with `mode=ro`: a WAL database cannot be opened read-only
+# unless its -shm sidecar is already there, and the source's may not be. The
+# connections are read-only in practice -- nothing is written to the source.
+try:
+    source = sqlite3.connect(src)
+    before = row_counts(source)
+    with sqlite3.connect(dest) as target:
+        source.backup(target)
+    after = row_counts(target)
+except sqlite3.Error as exc:
+    print(f"cannot snapshot {src}: {exc}", file=sys.stderr)
+    sys.exit(1)
+finally:
+    try:
+        source.close()
+    except Exception:
+        pass
+
+# `PRAGMA integrity_check` passes on a truncated but structurally valid file,
+# so it cannot tell a complete snapshot from a partial one. Row counts can.
+missing = {t: (n, after.get(t)) for t, n in before.items() if after.get(t) != n}
+if missing:
+    for table, (want, got) in sorted(missing.items()):
+        print(f"{table}: source {want} rows, snapshot {got}", file=sys.stderr)
+    sys.exit(1)
+PYEOF
+            then
+                echo "WARNING: snapshot of $rel is incomplete or unreadable -- NOT backed up" >&2
+                # Remembered, because the read-back pass below only inspects
+                # files that landed: without this a database that could not be
+                # snapshotted produced a warning and still exited 0, so a
+                # scheduled run looked like it had backed everything up.
+                verify_failed=1
+                continue
             fi
             ;;
         *)
@@ -96,6 +170,50 @@ for rel in "${FILES[@]}"; do
     copied=$((copied + 1))
 done
 
+# Read the snapshots back. A backup is only worth having if it opens, and the
+# failure mode here -- a truncated copy, a snapshot missing committed rows --
+# is invisible until someone tries to restore, which is the worst time to find
+# out. This costs a few milliseconds and turns that into a message now.
+#
+# `verify_failed` is deliberately not reset here: a database that could not be
+# snapshotted above never lands in the destination and is skipped below, so
+# re-initialising would swallow exactly the failure worth reporting.
+for rel in "${FILES[@]}"; do
+    name="$(basename "$rel")"
+    snap="$DEST_DIR/$name"
+    [ -f "$snap" ] || continue
+    case "$name" in
+        *.db)
+            if ! "$PY" - "$snap" <<'PYEOF'
+import sqlite3
+import sys
+
+try:
+    conn = sqlite3.connect(sys.argv[1])
+    problems = [r[0] for r in conn.execute("PRAGMA integrity_check")
+                if r[0] != "ok"]
+    if problems:
+        print("; ".join(problems[:3]), file=sys.stderr)
+        sys.exit(1)
+    conn.close()
+except sqlite3.Error as exc:
+    print(exc, file=sys.stderr)
+    sys.exit(1)
+PYEOF
+            then
+                echo "WARNING: $name did not verify -- treat this snapshot as suspect" >&2
+                verify_failed=1
+            fi
+            ;;
+        *)
+            if [ ! -s "$snap" ]; then
+                echo "WARNING: $name is empty" >&2
+                verify_failed=1
+            fi
+            ;;
+    esac
+done
+
 if [ "$copied" -eq 0 ]; then
     rmdir "$DEST_DIR" 2>/dev/null || true
     echo "nothing to back up under $BASE_DIR"
@@ -103,6 +221,11 @@ if [ "$copied" -eq 0 ]; then
 fi
 
 echo "backed up $copied file(s) -> $DEST_DIR"
+
+if [ "$verify_failed" -ne 0 ]; then
+    echo "snapshot did not fully verify -- see the warnings above" >&2
+    exit 1
+fi
 
 # Retention. Backups live on the same disk they protect and nothing pruned
 # them, so this directory only ever grew. Keep the most recent N of each kind:
