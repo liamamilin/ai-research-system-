@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
@@ -41,6 +42,33 @@ def _round_artifacts(date: str, output_dir: str) -> list[dict]:
             entry["empty"] = True
         found.append(entry)
     return found
+
+
+def _recorded_round(date: str, settings) -> Optional[dict]:
+    """A round's recorded state, for rounds this server process did not run.
+
+    ``pipeline.get_round_state`` reads the web runner's in-memory run dict, so
+    it only knows about rounds started from the UI, and only until the process
+    restarts. ``core.rounds`` keeps the same information durably in
+    ``state/pipeline_rounds.json``, and both entry points write it: the web
+    runner, and ``run.py --round-finish`` for a round run from a terminal or by
+    launchd.
+
+    Without this fallback a round started outside the UI showed no trigger, no
+    timings and no per-stage status on the Rounds page -- the 2026-09-29 round
+    displayed as a bare "10/10 完成" next to older rounds that showed "by
+    launchd". That matters more now than it did: with the daily trigger gone,
+    rounds get started by hand.
+    """
+    try:
+        from core import rounds as rounds_store
+
+        for entry in rounds_store.list_rounds(settings.paths.state_dir):
+            if entry.get("date") == date:
+                return entry
+    except Exception:  # noqa: BLE001 - a missing record is not an error
+        return None
+    return None
 
 
 def _artifact_complaints(path: str, name: str, round_dir: str) -> tuple[list[str], int]:
@@ -81,7 +109,7 @@ def _round_payload(date: str, with_warnings: bool = False) -> dict:
         "tokens_total": sum(tokens.values()),
         "stages": stages,
         "artifacts": _round_artifacts(date, settings.paths.output_dir),
-        "live": pipeline.get_round_state(date),
+        "live": pipeline.get_round_state(date) or _recorded_round(date, settings),
     }
     if with_warnings:
         payload["warnings"] = _round_artifact_warnings(

@@ -242,3 +242,64 @@ def test_artifact_warnings_reach_the_log_on_the_web_path(web_env, caplog):
                  "otherwise satisfy a looser check"
     assert any("未识别的表头" in r.message for r in mine), \
         "the unmapped column was not forwarded: " + str([r.message for r in mine])
+
+
+def test_a_round_run_outside_the_ui_still_shows_its_state(client, web_env):
+    """The Rounds page showed a bare "10/10 完成" for a terminal-run round.
+
+    `get_round_state` reads the web runner's in-memory run dict, so it only
+    knows rounds this process started, and only until it restarts. The durable
+    record in core.rounds carries the trigger and timings for both entry
+    points, so the API falls back to it. With the daily trigger deleted, more
+    rounds get started by hand, which is exactly when the page going quiet gets
+    noticed.
+    """
+    tmp_path, _ = web_env
+    from core import rounds as rounds_store
+
+    round_dir = tmp_path / "output" / "practical_ai_intelligence" / "2026-02-02"
+    round_dir.mkdir(parents=True)
+    for name in ("00_collection_plan.md", "09_executive_synthesis_and_actions.md"):
+        (round_dir / name).write_text("# x\n", encoding="utf-8")
+
+    rounds_store.upsert_round(
+        "2026-02-02", status="success", trigger="manual", stages=[],
+        started_at="2026-02-02T06:00:00+0800",
+        finished_at="2026-02-02T06:21:00+0800",
+        state_dir=str(tmp_path / "state"))
+
+    _login(client)
+    r = client.get("/api/pipeline/rounds?limit=10")
+    assert r.status_code == 200, r.text
+    found = [x for x in r.json()["rounds"] if x["date"] == "2026-02-02"]
+    assert found, "the round is missing from the list"
+    live = found[0]["live"]
+    assert live, "no state at all for a round this server did not run"
+    assert live["trigger"] == "manual", live
+    assert live["finished_at"] == "2026-02-02T06:21:00+0800", live
+
+
+def test_a_live_run_still_wins_over_the_recorded_one(client, web_env):
+    """The in-memory state is the fresher one while a round is in flight."""
+    from web.runner import pipeline as runner
+
+    tmp_path, _ = web_env
+    from core import rounds as rounds_store
+
+    rounds_store.upsert_round("2026-03-03", status="success", trigger="manual",
+                              stages=[], state_dir=str(tmp_path / "state"))
+    with runner._lock:
+        runner._rounds["2026-03-03"] = {
+            "date": "2026-03-03", "status": "running", "trigger": "web",
+            "started_at": "2026-03-03T06:00:00+0800", "finished_at": None,
+            "stages": {}, "cancel_requested": False,
+        }
+    _login(client)
+    try:
+        r = client.get("/api/pipeline/rounds?limit=10")
+        rows = [x for x in r.json()["rounds"] if x["date"] == "2026-03-03"]
+        assert rows and rows[0]["live"]["status"] == "running", rows
+        assert rows[0]["live"]["trigger"] == "web", rows[0]["live"]
+    finally:
+        with runner._lock:
+            runner._rounds.pop("2026-03-03", None)
