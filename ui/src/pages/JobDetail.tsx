@@ -816,7 +816,7 @@ function LogViewer({
               const thinking = Number(ev.reasoning_chars || 0);
               const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
               return (
-                <div key={i} className="text-text-muted/80 whitespace-pre-wrap break-all">
+                <div key={i} className="text-text-muted whitespace-pre-wrap break-all">
                   ✎ {thinking > 0 ? `thinking ${fmt(thinking)} / ` : ""}
                   writing {fmt(chars)} chars ({String(ev.elapsed ?? "?")}s)
                 </div>

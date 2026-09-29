@@ -19,7 +19,7 @@
            transition disabled:opacity-50 disabled:cursor-not-allowed;
   }
   .btn-primary {
-    @apply bg-accent hover:bg-accent-hover border-accent text-white;
+    @apply bg-accent-solid hover:bg-accent-solid-hover border-accent-solid text-white;
   }
   .btn-danger {
     @apply bg-danger hover:opacity-90 border-danger text-white;
@@ -33,7 +33,11 @@
     @apply bg-bg-card border border-border rounded-lg;
   }
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded text-xs font-medium;
+    /* 24px is the WCAG 2.2 AA minimum target size. The filter chips on the
+       Reports page measured 22px tall, and they are the controls a phone user
+       taps first. Two pixels of height on a pill nobody notices; a missed tap
+       everybody does. */
+    @apply inline-flex items-center px-2 py-0.5 min-h-[24px] rounded text-xs font-medium;
   }
 }
 /* ----- rendered markdown -------------------------------------------------

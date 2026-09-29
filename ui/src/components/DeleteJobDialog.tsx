@@ -50,7 +50,7 @@ export function DeleteJobDialog({ jobName, isRunning, warnings = [], onDeleted, 
           将删除该 job 的 YAML 文件，它会从 Jobs 列表和周期调度中消失。
         </p>
 
-        <div className="text-xs text-text-muted/80 font-mono break-all bg-bg-hover rounded px-2 py-1.5">
+        <div className="text-xs text-text-muted font-mono break-all bg-bg-hover rounded px-2 py-1.5">
           jobs/{jobName}.yaml
         </div>
 

@@ -235,7 +235,7 @@ export function RoundsPage() {
                         key={a.name}
                         onClick={() => downloadArtifact(round.date, a.name)}
                         className={cn(
-                          "text-xs px-1.5 py-0.5 rounded border font-mono transition",
+                          "text-xs px-1.5 py-0.5 min-h-[24px] rounded border font-mono transition",
                           hurt
                             ? "border-warning/60 text-warning hover:bg-warning/10"
                             : "border-border text-text-muted hover:text-text hover:bg-bg-hover",
@@ -253,14 +253,14 @@ export function RoundsPage() {
                   })}
                   <button
                     onClick={() => setDetailDate(round.date)}
-                    className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline"
+                    className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline min-h-[24px] py-1"
                   >
                     详情
                   </button>
                   {roundIndex < rounds.length - 1 && (
                     <button
                       onClick={() => setCompareDate(compareDate === round.date ? null : round.date)}
-                      className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline"
+                      className="text-xs text-text-muted hover:text-text underline-offset-2 hover:underline min-h-[24px] py-1"
                     >
                       {compareDate === round.date ? "收起对比" : "对比上一轮"}
                     </button>

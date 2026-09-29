@@ -73,7 +73,7 @@ export function TemplateGrid({
             title="筛选：全部"
             className={cn(
               "badge border cursor-pointer",
-              !category ? "bg-accent text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover"
+              !category ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover"
             )}
           >
             全部
@@ -86,7 +86,7 @@ export function TemplateGrid({
               title={`筛选：${categoryLabel(c)}`}
               className={cn(
                 "badge border cursor-pointer",
-                category === c ? "bg-accent text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover"
+                category === c ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover"
               )}
             >
               {categoryLabel(c)}

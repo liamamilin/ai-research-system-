@@ -395,7 +395,7 @@ export function ReportsPage() {
                   key={key}
                   onClick={() => handleScope(key)}
                   className={cn("badge border cursor-pointer hover:bg-bg-hover",
-                    scope === key ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                    scope === key ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border"
                   )}
                 >
                   {label}
@@ -404,7 +404,7 @@ export function ReportsPage() {
 
               {/* Time / round / sort: the answer to "what is new" without
                   scrolling a 300-row list. */}
-              <span className="text-border px-1">|</span>
+              <span className="text-text-muted/50 px-1" aria-hidden="true">|</span>
               <select
                 className="input text-xs py-1 w-auto"
                 value={showCustom ? "custom" : range}
@@ -424,7 +424,7 @@ export function ReportsPage() {
               <button
                 onClick={() => { setLatestOnly(!latestOnly); setPage(1); }}
                 className={cn("badge border cursor-pointer hover:bg-bg-hover",
-                  latestOnly ? "bg-accent text-white border-accent" : "bg-bg-card border-border")}
+                  latestOnly ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border")}
                 title="只看最新一轮流水线的产出"
               >
                 最新一轮
@@ -472,13 +472,13 @@ export function ReportsPage() {
                 </span>
               )}
 
-              {tags.length > 0 && <span className="text-border px-1">|</span>}
+              {tags.length > 0 && <span className="text-text-muted/50 px-1" aria-hidden="true">|</span>}
               {tags.slice(0, 12).map((t) => (
                 <button
                   key={t.tag}
                   onClick={() => handleTagFilter(t.tag)}
                   className={cn("badge border cursor-pointer hover:bg-bg-hover",
-                    tag === t.tag ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                    tag === t.tag ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border"
                   )}
                 >
                   #{t.tag} <span className="opacity-60">{t.count}</span>
@@ -493,7 +493,7 @@ export function ReportsPage() {
               <button
                 onClick={() => handleCategoryFilter("")}
                 className={cn("badge border cursor-pointer hover:bg-bg-hover",
-                  !category ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                  !category ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border"
                 )}
               >
                 全部
@@ -503,7 +503,7 @@ export function ReportsPage() {
                   key={c}
                   onClick={() => handleCategoryFilter(c)}
                   className={cn("badge border cursor-pointer hover:bg-bg-hover",
-                    category === c ? "bg-accent text-white border-accent" : "bg-bg-card border-border"
+                    category === c ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border"
                   )}
                 >
                   {c}
@@ -558,7 +558,7 @@ export function ReportsPage() {
                         )}
                         {item.job_name && <span>· {item.job_name}</span>}
                         {item.meta && (
-                          <span className="text-text-muted/80">
+                          <span className="text-text-muted">
                             · {item.meta.model}
                             {item.meta.total_tokens ? ` · ${formatTokens(item.meta.total_tokens)} tok` : ""}
                             {item.meta.duration_seconds ? ` · ${Math.round(item.meta.duration_seconds)}s` : ""}

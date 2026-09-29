@@ -361,7 +361,7 @@ export function TemplateLibrary({ open, onClose, onUse }: Props) {
                   placeholder={"你是 {name} 领域的分析师…\n\n## 证据规则\n每条发现必须含发布日期与来源 URL…"}
                   onChange={(e) => setForm({ ...form, prompt: e.target.value })}
                 />
-                <p className="text-[11px] text-text-muted/80 mt-1">
+                <p className="text-[11px] text-text-muted mt-1">
                   建议包含：角色与读者、任务与时间窗、证据规则（日期 + URL，多源交叉验证）、固定输出结构、质量红线、忽略清单。
                 </p>
               </div>

@@ -39,7 +39,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
         {user && (
           <button
             onClick={() => setAccountOpen(true)}
-            className="text-xs text-text-muted hover:text-text mt-1 text-left"
+            className="text-xs text-text-muted hover:text-text mt-1 text-left min-h-[24px] py-0.5"
           >
             {user.username} · {user.role} <span className="opacity-60">（账号设置）</span>
           </button>
@@ -57,7 +57,7 @@ export function Sidebar({ open, onNavigate }: { open: boolean; onNavigate?: () =
               cn(
                 "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition",
                 isActive
-                  ? "bg-accent text-white"
+                  ? "bg-accent-solid text-white"
                   : "text-text-muted hover:text-text hover:bg-bg-hover"
               )
             }

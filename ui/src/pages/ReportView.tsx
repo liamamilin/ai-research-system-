@@ -304,7 +304,7 @@ export function ReportViewPage() {
       <div className="text-xs text-text-muted flex flex-wrap items-center gap-2">
         <span>{path}</span>
         {meta && (
-          <span className="text-text-muted/80">
+          <span className="text-text-muted">
             · {meta.model}
             {meta.total_tokens ? ` · ${formatTokens(meta.total_tokens)} tokens` : ""}
             {meta.duration_seconds ? ` · ${Math.round(meta.duration_seconds)}s` : ""}

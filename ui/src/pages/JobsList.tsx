@@ -238,12 +238,12 @@ export function JobsListPage() {
             key={key}
             onClick={() => setStatusFilter(key)}
             className={cn("badge border cursor-pointer hover:bg-bg-hover",
-              statusFilter === key ? "bg-accent text-white border-accent" : "bg-bg-card border-border")}
+              statusFilter === key ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border")}
           >
             {label}
           </button>
         ))}
-        <span className="text-border px-1">|</span>
+        <span className="text-text-muted/50 px-1" aria-hidden="true">|</span>
         <select
           className="input text-xs py-1 w-auto"
           value={range}
@@ -285,7 +285,7 @@ export function JobsListPage() {
           <button
             onClick={() => setCategoryFilter("")}
             className={cn("badge border cursor-pointer hover:bg-bg-hover",
-              !categoryFilter ? "bg-accent text-white border-accent" : "bg-bg-card border-border")}
+              !categoryFilter ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border")}
           >
             全部分类
           </button>
@@ -295,7 +295,7 @@ export function JobsListPage() {
               onClick={() => setCategoryFilter(categoryFilter === cat.name ? "" : cat.name)}
               className={cn("badge border cursor-pointer hover:bg-bg-hover",
                 categoryFilter === cat.name
-                  ? "bg-accent text-white border-accent"
+                  ? "bg-accent-solid text-white border-accent"
                   : "bg-bg-card border-border")}
               title={`${cat.name}：${cat.count} 个 job`}
             >
@@ -342,7 +342,7 @@ export function JobsListPage() {
                       title={`使用分类 ${cat.name}`}
                       className={cn("badge border cursor-pointer hover:bg-bg-hover transition",
                         form.category === cat.name
-                          ? "bg-accent text-white border-accent"
+                          ? "bg-accent-solid text-white border-accent"
                           : "bg-bg-card border-border")}
                     >
                       {cat.name} <span className="opacity-60">{cat.count}</span>
@@ -382,7 +382,7 @@ export function JobsListPage() {
               </label>
               <textarea className="input font-mono text-xs min-h-[80px]" placeholder="Research {name} with keywords: {keywords}..."
                 value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} />
-              <p className="text-[11px] text-text-muted/80 mt-1">
+              <p className="text-[11px] text-text-muted mt-1">
                 可用变量：{"{name}"} {"{keywords}"} {"{language}"} {"{date}"} {"{date_1d_ago}"}{" "}
                 {"{date_7d_ago}"} {"{time}"} {"{datetime}"} {"{recent_outcomes}"}（上一轮已判定结果）{"{reported_events}"}（已报道来源）；
                 输出路径模板支持 {"{name}"} {"{date}"} {"{time}"} {"{datetime}"}。建议写清：角色、目标、输出结构、每条发现的证据要求（发布日期 + 来源 URL）。
@@ -398,7 +398,7 @@ export function JobsListPage() {
                 <label className="block text-xs text-text-muted">从模板开始（可选）</label>
                 <button type="button" onClick={() => setForm({ ...form, template: "" })}
                   className={cn("px-2 py-0.5 text-[11px] rounded border transition",
-                    !form.template ? "bg-accent text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover")}>
+                    !form.template ? "bg-accent-solid text-white border-accent" : "bg-bg-card border-border hover:bg-bg-hover")}>
                   不用模板
                 </button>
                 <button type="button" onClick={() => setShowLibrary(true)}
@@ -420,7 +420,7 @@ export function JobsListPage() {
                   emptyHint="暂无模板，点「管理/新建模板」创建，或直接手写 Prompt。"
                 />
               </div>
-              <p className="text-[11px] text-text-muted/80 mt-1">
+              <p className="text-[11px] text-text-muted mt-1">
                 选中模板会把它的 prompt / 输出路径 / 关键词填入下方表单，接下来只需改 <code>name</code> 与 <code>keywords</code>。
               </p>
             </div>

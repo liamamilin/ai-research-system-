@@ -333,7 +333,7 @@ export function SystemConfig() {
           <button
             onClick={() => { setMode("form"); load(); }}
             className={cn("px-3 py-1.5 text-xs flex items-center gap-1.5",
-              mode === "form" ? "bg-accent text-white" : "text-text-muted hover:bg-bg-hover")}
+              mode === "form" ? "bg-accent-solid text-white" : "text-text-muted hover:bg-bg-hover")}
           >
             <SlidersHorizontal className="w-3 h-3" />
             表单
@@ -341,7 +341,7 @@ export function SystemConfig() {
           <button
             onClick={() => { setMode("yaml"); load(); }}
             className={cn("px-3 py-1.5 text-xs flex items-center gap-1.5",
-              mode === "yaml" ? "bg-accent text-white" : "text-text-muted hover:bg-bg-hover")}
+              mode === "yaml" ? "bg-accent-solid text-white" : "text-text-muted hover:bg-bg-hover")}
           >
             <FileCode className="w-3 h-3" />
             YAML（高级）
