@@ -436,3 +436,103 @@ def test_priority_still_arrives_without_its_markup():
     parsed = artifacts.parse_action_items(P9_AS_WRITTEN)
     assert parsed["actions"][0]["priority"] == "P0"
     assert parsed["tests"][0]["priority"] == "P0"
+
+
+# --- The wording actually drifts between rounds ---------------------------
+#
+# Run against all 23 rounds on disk, the contract reported which section it
+# could not find, and the answer was the same each time: the model writes
+# different headings. "2. 立即执行项" where other rounds write "立即行动",
+# "3. 本周应做的测试" where they write "本周测试". The 2026-09-24 round
+# therefore produced zero actions and zero tests -- the tracking store synced
+# nothing, the digest had nothing to list, and the UI showed no action items,
+# with only a warning that the web runner used to discard.
+
+P9_DRIFTED = """
+## 2. 立即执行项
+
+| 行动 | 为什么现在 | 优先级 |
+|---|---|---|
+| 升级依赖 | 安全公告 | P0 |
+
+## 3. 本周应做的测试
+
+| 测试 | 方法 | 成功判据 |
+|---|---|---|
+| 回归对比 | 跑固定集 | 全绿 |
+"""
+
+
+def test_a_section_is_found_despite_drifted_wording():
+    parsed = artifacts.parse_action_items(P9_DRIFTED)
+    assert len(parsed["actions"]) == 1, parsed["actions"]
+    assert parsed["actions"][0]["action"] == "升级依赖"
+    assert len(parsed["tests"]) == 1, parsed["tests"]
+    assert parsed["tests"][0]["success_criteria"] == "全绿"
+
+
+def test_the_english_headings_still_match():
+    parsed = artifacts.parse_action_items(P9_AS_WRITTEN)
+    assert parsed["actions"][0]["ref"] == "A1"
+    assert parsed["tests"][0]["ref"] == "T1"
+
+
+def _watchlist(header: str) -> str:
+    return f"""
+## 9. Watchlist
+
+{header}
+"""
+
+
+def test_a_watchlist_rationale_is_not_filed_as_why_now():
+    """`为什么关注` contains 为什么, which is a why_now keyword.
+
+    Every one of the 13 watchlist items in the 2026-09-28 round came out with
+    `watch_rationale: null` and the rationale sitting in `why_now` -- the action
+    table's field. The watchlist prompt sections and this contract are both
+    built around `watch_rationale`.
+    """
+    parsed = artifacts.parse_watchlist(_watchlist(
+        "| 主题 | 触发信号 | 为什么关注 | 复查日期 | 来源 URL |\n"
+        "|---|---|---|---|---|\n"
+        "| 模型下线 | 公告发布 | 会影响本项目依赖 | 2026-10-01 | https://a.test |"))
+    item = parsed["items"][0]
+    assert item["watch_rationale"] == "会影响本项目依赖", item
+    assert not item.get("why_now"), f"rationale leaked into why_now: {item}"
+
+
+def test_the_project_style_watchlist_keeps_both_columns():
+    """`项目 | 关注原因 | 触发条件 | 预期时间` matched nothing at all.
+
+    `项目` was the most frequent unmapped header in the corpus (11 rounds) and
+    `关注原因` matched no field, because the keyword list had no watch_rationale
+    entry -- so the item lost both its subject and its reason to watch.
+    """
+    parsed = artifacts.parse_watchlist(_watchlist(
+        "| 项目 | 关注原因 | 触发条件 | 预期时间 |\n"
+        "|---|---|---|---|\n"
+        "| 定价页改版 | 影响成本测算 | 出现新价目 | 2026-10-15 |"))
+    item = parsed["items"][0]
+    assert item["topic"] == "定价页改版", item
+    assert item["watch_rationale"] == "影响成本测算", item
+    assert item["expected_time"] == "2026-10-15", item
+    assert not parsed.get("warnings"), parsed.get("warnings")
+
+
+def test_an_expected_window_is_not_filed_as_a_deadline():
+    """A forecast of when something changes is not a commitment to do it."""
+    assert artifacts._canonical_header("预期变化时间") == "expected_time"
+    assert artifacts._canonical_header("时限") == "deadline"
+
+
+def test_action_table_urgency_still_fills_why_now():
+    """The watchlist fix must not steal the action table's own field."""
+    parsed = artifacts.parse_action_items("""
+## 2. Immediate Actions
+
+| 行动 | 为什么现在 | 优先级 |
+|---|---|---|
+| 升级 | 今晚必须 | P0 |
+""")
+    assert parsed["actions"][0]["why_now"] == "今晚必须", parsed["actions"][0]

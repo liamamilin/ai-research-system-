@@ -61,6 +61,15 @@ _FIELD_ALIASES: dict[str, list[str]] = {
         "时限", "截止", "截止时间", "期限", "完成时间", "复查日期", "复查时间", "复看日期",
         "deadline", "duedate", "due", "when", "timeline", "checkbydate", "recheckdate",
     ],
+    "expected_time": [
+        # When the writer expects the thing to change -- not a commitment, so
+        # not `deadline`. Most frequent remaining unmapped header across the
+        # corpus (8 rounds), and the part of a watchlist entry that says when
+        # to come back to it.
+        "预期时间", "预期变化时间", "预计窗口", "预期窗口", "预计变化时间",
+        "预计观察周期", "观察周期",
+        "expectedtime", "expectedwindow", "expectedchange", "expectby",
+    ],
     "acceptance": [
         "验收标准", "验收", "完成标准", "acceptance", "acceptancecriteria", "definitionofdone",
     ],
@@ -89,6 +98,11 @@ _FIELD_ALIASES: dict[str, list[str]] = {
     ],
     "topic": [
         "议题", "观察项", "主题", "关注点", "观察议题",
+        # Tables written as `项目 | 关注原因 | 触发条件 | 预期时间` name the
+        # watched thing with these. `项目` was the most frequent unmapped
+        # header across the whole corpus -- 11 rounds' watchlists, and the item
+        # lost its subject entirely.
+        "项目", "事件", "关注项", "监控项",
         "topic", "topics", "watchitem", "subject", "item",
     ],
     "watch_point": [
@@ -96,6 +110,17 @@ _FIELD_ALIASES: dict[str, list[str]] = {
     ],
     "watch_rationale": [
         "为什么观察", "为何观察", "观察理由", "理由", "原因", "为何关注", "关注理由",
+        # The names the pipeline actually used for a watchlist's rationale.
+        # `为什么关注` and `为什么值得盯` contain "为什么", which is a why_now
+        # keyword, so they were landing in the action table's field: across the
+        # 2026-09-28 round every one of the 13 watchlist items had
+        # `watch_rationale: null` and the rationale sat in `why_now`, in the
+        # very field the watchlist prompt sections and this contract are built
+        # around. `关注原因` matched nothing at all -- there was no
+        # watch_rationale entry in the keyword list -- so tables headed
+        # `项目 | 关注原因 | ...` lost both columns.
+        "为什么关注", "为什么值得盯", "为何值得盯", "值得盯", "值得关注的原因",
+        "关注原因", "观察原因", "为什么盯", "为何盯",
         "whys", "reason", "why", "whywatchit", "whywatch", "rationale",
     ],
     "trigger": [
@@ -113,10 +138,18 @@ _FIELD_ALIASES: dict[str, list[str]] = {
 # more specific fragments must come first.
 _HEADER_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("trigger", ("触发", "复审", "阈值")),
+    # Ahead of why_now deliberately. A watchlist's 为什么关注 and 为什么值得盯
+    # both contain 为什么, which is a why_now keyword, so why_now claimed them
+    # and the rationale of all 13 items in the 2026-09-28 round sat in the
+    # action table's field while watch_rationale stayed null. There was no
+    # watch_rationale entry here at all, which is why 关注原因 matched nothing.
+    ("watch_rationale", ("值得关注", "值得盯", "关注原因", "观察原因",
+                          "为什么关注", "为什么观察", "关注理由", "观察理由")),
     ("why_now", ("现在", "时机", "为何", "为什么")),
     ("acceptance", ("验收", "完成标准")),
     ("owner_role", ("负责", "角色", "承担")),
     ("deadline", ("截止", "时限", "期限", "何时")),
+    ("expected_time", ("预期时间", "预期变化", "预计窗口", "预计观察", "观察周期")),
     ("topic", ("观察", "议题", "主题", "关注")),
     ("expected_benefit", ("收益", "价值", "好处")),
     ("success_criteria", ("成功标准", "成功判据", "判据", "判定", "通过")),
@@ -159,8 +192,27 @@ def _canonical_header(header: str) -> Optional[str]:
     return None
 
 
-def _find_section(text: str, *keywords: str) -> str:
-    """Return the body of the first heading containing any keyword."""
+def _find_section(text: str, *matchers) -> str:
+    """Return the body of the first heading matching any matcher.
+
+    A matcher is either a substring, or a tuple of fragments that must *all*
+    appear. The tuple form exists because the heading wording drifts between
+    rounds: the 2026-09-24 report wrote "2. 立即执行项" and "3. 本周应做的测试"
+    where the other rounds write "立即行动" and "本周测试", so that round's
+    actions and tests both parsed to nothing -- an entire round silently lost
+    its action items, the tracking store got nothing to sync, and the digest
+    had no actions to show. Matching "立即" plus either 行动 or 执行, and "本周"
+    plus 测试, survives the drift instead of a fixed phrase list.
+    """
+    def matches(title: str) -> bool:
+        for matcher in matchers:
+            if isinstance(matcher, tuple):
+                if all(part.lower() in title for part in matcher):
+                    return True
+            elif matcher.lower() in title:
+                return True
+        return False
+
     lines = text.splitlines()
     start: Optional[int] = None
     level = 2
@@ -170,7 +222,7 @@ def _find_section(text: str, *keywords: str) -> str:
             continue
         title = match.group(2).lower()
         if start is None:
-            if any(k.lower() in title for k in keywords):
+            if matches(title):
                 start = i + 1
                 level = len(match.group(1))
         elif len(match.group(1)) <= level:
@@ -351,8 +403,13 @@ def _parse_items(section: str) -> list[dict]:
 def parse_action_items(p9_text: str) -> dict:
     """Extract immediate actions and this-week tests from a P9 report."""
     warnings: list[str] = []
-    actions_section = _find_section(p9_text, "立即行动", "Immediate Actions")
-    tests_section = _find_section(p9_text, "本周测试", "Test This Week")
+    actions_section = _find_section(
+        p9_text,
+        ("立即", "行动"), ("立即", "执行"), "Immediate Actions")
+    tests_section = _find_section(
+        p9_text,
+        ("本周", "测试"), ("本周", "验证"), ("本周", "试验"),
+        "Test This Week")
     actions = canonicalize_rows(
         [_map_row(r, warnings, "actions") for r in _parse_table(actions_section)],
         "action", warnings, "actions")
