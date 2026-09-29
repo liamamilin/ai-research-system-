@@ -25,12 +25,25 @@ def _quality_summary(meta: Optional[dict]) -> Optional[dict]:
     if not check or not check.get("total"):
         return None
     audit = check.get("citation_audit") or {}
+    # A coverage figure measured against nothing is not a low score, it is no
+    # score. P7, P8 and P9 run no searches -- they are handed the upstream
+    # documents and cite from them -- and until the engine counted those as
+    # known, their baseline was empty. The 2026-09-29 synthesis was recorded as
+    # 0% across 78 citations, 77 of which are traceable to P1-P8, and the report
+    # card showed "引用 0%" on the most important report of the day.
+    #
+    # Coverage is now computed correctly, but the figure is written once at run
+    # time, so rounds finished before the fix keep the old number. Rather than
+    # publish a stored 0% as a verdict, an empty baseline is reported as
+    # unmeasured and the row says so.
+    unmeasured = int(check.get("retrieved_count") or 0) == 0
     return {
-        "coverage": check.get("coverage"),
+        "coverage": None if unmeasured else check.get("coverage"),
+        "unmeasured": unmeasured,
         "matched": check.get("matched"),
         "total": check.get("total"),
         "unmatched": check.get("unmatched"),
-        "below_threshold": bool(check.get("below_threshold")),
+        "below_threshold": False if unmeasured else bool(check.get("below_threshold")),
         "reachable": (check.get("reachability") or {}).get("reachable"),
         # The only numbers that separate "the model cited something it knows"
         # from "the model invented a link". `undecidable` is deliberately its

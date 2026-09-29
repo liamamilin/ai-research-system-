@@ -65,6 +65,11 @@ export function ReportViewPage() {
 
   const [content, setContent] = useState("");
   const [meta, setMeta] = useState<any>(null);
+  // No retrieved URLs means there was nothing to compare citations against,
+  // which is not the same as finding none of them traceable. The stored record
+  // keeps `retrieved_count` for exactly this.
+  const unmeasuredCitations =
+    (meta?.citation_check?.retrieved_count ?? 0) === 0;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
@@ -311,20 +316,37 @@ export function ReportViewPage() {
           <span
             className={cn(
               "badge border",
-              meta.citation_check.unmatched === 0
-                ? "bg-green-900/40 text-green-400 border-green-800"
-                : meta.citation_check.coverage >= 0.8
-                  ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
-                  : "bg-red-900/40 text-red-400 border-red-800"
+              // A synthesis stage has no searches of its own -- it is handed the
+              // upstream documents and cites from them -- so before the engine
+              // counted those as known, its baseline was empty and every
+              // citation came out "unmatched". Calling 78 of them 存疑 when 77
+              // are traceable to P1-P8 is an accusation the data does not
+              // support, so an empty baseline reads as not measured.
+              unmeasuredCitations
+                ? "bg-slate-900/40 text-slate-400 border-slate-800"
+                : meta.citation_check.unmatched === 0
+                  ? "bg-green-900/40 text-green-400 border-green-800"
+                  : meta.citation_check.coverage >= 0.8
+                    ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
+                    : "bg-red-900/40 text-red-400 border-red-800"
             )}
             title={
-              meta.citation_check.unmatched_examples?.length
-                ? `未在本次检索结果中的引用：\n${meta.citation_check.unmatched_examples.join("\n")}`
-                : "报告中所有 URL 都来自本次检索"
+              unmeasuredCitations
+                ? `该阶段没有自己的检索结果，${meta.citation_check.total} 条引用无法与检索比对`
+                : meta.citation_check.unmatched_examples?.length
+                  ? `未在本次检索结果中的引用：\n${meta.citation_check.unmatched_examples.join("\n")}`
+                  : "报告中所有 URL 都来自本次检索"
             }
           >
-            引用 {meta.citation_check.matched}/{meta.citation_check.total} 可追溯
-            {meta.citation_check.unmatched > 0 && `（${meta.citation_check.unmatched} 个存疑）`}
+            {unmeasuredCitations ? (
+              <>引用 {meta.citation_check.total} 条 · 未测量</>
+            ) : (
+              <>
+                引用 {meta.citation_check.matched}/{meta.citation_check.total} 可追溯
+                {meta.citation_check.unmatched > 0 &&
+                  `（${meta.citation_check.unmatched} 个存疑）`}
+              </>
+            )}
           </span>
         )}
       </div>

@@ -151,3 +151,38 @@ def test_the_agent_and_the_check_extract_identically():
         # pattern must agree on where each URL ends.
         assert set(_URL_RE.findall(citation)) == set(
             provenance.URL_RE.findall(citation))
+
+
+def test_an_empty_baseline_is_reported_as_unmeasured_not_as_zero():
+    """A coverage figure measured against nothing is no score, not a low one.
+
+    P7, P8 and P9 run no searches of their own. Until the engine counted the
+    prompt's own URLs as known, their baseline was empty and coverage came out
+    0.0 -- recorded on the 2026-09-29 synthesis as 0% across 78 citations, 77
+    of which are traceable to P1-P8. The report card rendered that as a red
+    "引用 0%" and the detail page called all 78 存疑.
+
+    The figure is written once at run time, so rounds finished before the fix
+    keep the old number. Rather than publish a stored 0% as a verdict, an empty
+    baseline is surfaced as unmeasured, and the card and the detail page both
+    say so.
+    """
+    from web.routes.reports import _quality_summary
+
+    stale = {"citation_check": {"total": 78, "matched": 0, "unmatched": 78,
+                                 "coverage": 0.0, "retrieved_count": 0,
+                                 "below_threshold": True}}
+    summary = _quality_summary(stale)
+    assert summary["unmeasured"] is True
+    assert summary["coverage"] is None, "a stored 0% must not be republished"
+    assert summary["below_threshold"] is False, \
+        "an unmeasured round must not be flagged as below the gate"
+    assert summary["total"] == 78, "the citation count is still worth showing"
+
+    measured = {"citation_check": {"total": 40, "matched": 30, "unmatched": 10,
+                                   "coverage": 0.75, "retrieved_count": 120,
+                                   "below_threshold": False}}
+    good = _quality_summary(measured)
+    assert good["unmeasured"] is False
+    assert good["coverage"] == 0.75
+    assert good["below_threshold"] is False

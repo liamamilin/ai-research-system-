@@ -569,15 +569,24 @@ export function ReportsPage() {
                           <span
                             className={cn(
                               "badge border text-[10px]",
-                              item.quality.unmatched === 0
-                                ? "bg-green-900/40 text-green-400 border-green-800"
-                                : item.quality.coverage >= 0.6
-                                  ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
-                                  : "bg-red-900/40 text-red-400 border-red-800"
+                              item.quality.unmeasured
+                                ? "bg-slate-900/40 text-slate-400 border-slate-800"
+                                : item.quality.unmatched === 0
+                                  ? "bg-green-900/40 text-green-400 border-green-800"
+                                  : item.quality.coverage >= 0.6
+                                    ? "bg-yellow-900/40 text-yellow-400 border-yellow-800"
+                                    : "bg-red-900/40 text-red-400 border-red-800"
                             )}
                             title={
-                              `引用溯源：${item.quality.matched}/${item.quality.total} 来自本次检索` +
-                              (item.quality.unmatched ? `，${item.quality.unmatched} 个未在检索结果中` : "") +
+                              (item.quality.unmeasured
+                                ? // Measured against nothing is not a low score,
+                                  // it is no score. Showing 0% here would read as
+                                  // an accusation about 78 citations, 77 of which
+                                  // are traceable upstream.
+                                  "引用未测量：该阶段没有自己的检索结果，无法比对" +
+                                  `（报告中有 ${item.quality.total} 条引用）`
+                                : `引用溯源：${item.quality.matched}/${item.quality.total} 来自本次检索` +
+                                  (item.quality.unmatched ? `，${item.quality.unmatched} 个未在检索结果中` : "")) +
                               // "Not in this run's results" reads like an accusation.
                               // When the unmatched ones have been probed, say how
                               // many actually fail to resolve -- on 2026-09-28, 15
@@ -593,7 +602,10 @@ export function ReportsPage() {
                                 : "")
                             }
                           >
-                            引用 {Math.round((item.quality.coverage ?? 0) * 100)}%
+                            引用{" "}
+                            {item.quality.unmeasured
+                              ? "未测量"
+                              : `${Math.round((item.quality.coverage ?? 0) * 100)}%`}
                           </span>
                         )}
                         {item.snippet && <Snippet html={String(item.snippet)} />}
