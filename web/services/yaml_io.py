@@ -189,20 +189,39 @@ def atomic_create(file_path: str, content: str):
 
 
 def atomic_write(file_path: str, content: str):
-    """Atomic write: write to .tmp then rename. Does NOT backup (caller's choice)."""
-    tmp_path = file_path + ".tmp"
+    """Atomic write: write to a private temp file, then rename over the target.
+
+    The temp name is unique per call, not ``file_path + ".tmp"``. A fixed name
+    is shared by every concurrent write to the same path, and two of them
+    interleave on it: one truncates what the other is writing, and the first
+    rename pulls the file out from under the second, which then fails with "No
+    such file or directory" for a path the caller never named. Measured with two
+    threads saving the same job, that is exactly what happened -- one save was
+    lost, and the error pointed at a file that did not exist. Renaming a
+    private temp file closes the window; `atomic_create` above already works
+    this way.
+
+    Does NOT back up; that is the caller's choice.
+    """
+    directory = os.path.dirname(file_path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory,
+                                    prefix=os.path.basename(file_path) + ".tmp.")
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
-        os.rename(tmp_path, file_path)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, file_path)
     except OSError as e:
-        # Clean up temp file on failure
+        raise IOError(f"写入文件失败: {e}")
+    finally:
+        # A no-op once the rename has succeeded. The point is not leaving a
+        # partial file behind when the write or the rename failed.
         try:
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
         except OSError:
             pass
-        raise IOError(f"写入文件失败: {e}")
 
 
 def save_job_yaml(

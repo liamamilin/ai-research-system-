@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 from io import StringIO
 from pathlib import Path
@@ -104,12 +105,27 @@ def _write_env_value(env_name: str, value: Optional[str]) -> None:
         out.append(f'{env_name}="{value}"')
 
     content = "\n".join(out).rstrip() + "\n"
-    tmp = path + ".tmp"
+    # A private temp name, not `path + ".tmp"`: two concurrent saves shared one
+    # fixed name, so one truncated the other's write and the first rename left
+    # the second failing on a path the caller never named. Same reasoning as
+    # `yaml_io.atomic_write`.
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(content)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".",
+                               prefix=os.path.basename(path) + ".tmp.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
     if value is not None:
         os.environ[env_name] = value
