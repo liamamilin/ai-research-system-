@@ -125,3 +125,39 @@ def test_backup_written_on_change(client, cfg, web_env):
                json={"patch": {"ai": {"model": "changed"}}}, headers=_csrf(client))
     backups = list((web_env[0] / "state" / "backups").glob("system_*.yaml"))
     assert backups, "expected a backup of system.yaml"
+
+
+def test_a_malformed_mtime_is_an_error_not_a_disabled_check(client, cfg):
+    """The conflict guard exists to stop a concurrent edit being clobbered.
+
+    An `expected_mtime` that could not be parsed raised inside the check, and a
+    bare `except (TypeError, ValueError): pass` swallowed it -- so the write
+    went ahead with the guard silently off. Leaving the field out is a client
+    choosing not to check, which is fine; sending a broken one is a bug and is
+    now reported as one.
+    """
+    _login(client)
+    r = client.put("/api/config/system",
+                   json={"content": SAMPLE, "expected_mtime": "not-a-timestamp"},
+                   headers=_csrf(client))
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "invalid_mtime", r.text
+    assert "keep this comment" in cfg.read_text(encoding="utf-8"), \
+        "the file was overwritten despite the malformed guard value"
+
+
+def test_omitting_the_mtime_still_saves(client, cfg):
+    _login(client)
+    r = client.put("/api/config/system", json={"content": SAMPLE},
+                   headers=_csrf(client))
+    assert r.status_code == 200, r.text
+
+
+def test_a_stale_mtime_is_still_a_conflict(client, cfg):
+    _login(client)
+    r = client.put("/api/config/system",
+                   json={"content": SAMPLE, "expected_mtime": 1.0},
+                   headers=_csrf(client))
+    assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "conflict"
+    assert "keep this comment" in cfg.read_text(encoding="utf-8")

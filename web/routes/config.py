@@ -176,7 +176,15 @@ def _mask_secrets(data: dict, parent_key: str = "") -> dict:
 
 @router.get("/system")
 def get_system_config(user=Depends(require_admin)):
-    """Read system.yaml with secrets masked."""
+    """Read system.yaml, with secrets masked in the structured view.
+
+    ``data`` is the parsed config with secret-looking values replaced, for the
+    form. ``content`` is the raw file text, unmasked, because the UI has a YAML
+    editor and round-trips what it was given; the PUT accepts the same text
+    back. So the masking is there to keep the *form* readable, not to keep
+    secrets off the wire -- ``content`` is the admin's own editable copy of a
+    file they can already read, and this endpoint is admin-only.
+    """
     from web.settings import get_settings
     settings = get_settings()
     path = os.path.join(settings.paths.config_dir, "system.yaml")
@@ -237,22 +245,36 @@ def update_system_config(
             detail=ApiError.make("empty_content", "内容不能为空"),
         )
 
-    # Conflict detection: refuse to overwrite edits made elsewhere
+    # Conflict detection: refuse to overwrite edits made elsewhere.
+    #
+    # A client that omits expected_mtime is choosing not to check, and that is
+    # allowed. A client that *sends* one and gets it wrong is not: `float()`
+    # raised, the bare `except` swallowed it, and the check was skipped while
+    # the write went ahead anyway -- so a typo in a client turned the guard off
+    # silently and the concurrent edit it exists to prevent was lost. An
+    # unparseable value is now an error rather than a disabled check.
     expected_mtime = payload.get("expected_mtime")
     if expected_mtime is not None and os.path.isfile(path):
-        current_mtime = os.path.getmtime(path)
         try:
-            if abs(current_mtime - float(expected_mtime)) > 0.001:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=ApiError.make(
-                        "conflict",
-                        "system.yaml 已被外部修改，请刷新后重试",
-                        details={"current_mtime": current_mtime},
-                    ),
-                )
+            expected = float(expected_mtime)
         except (TypeError, ValueError):
-            pass
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=ApiError.make(
+                    "invalid_mtime",
+                    f"expected_mtime 不是有效时间戳: {expected_mtime!r}",
+                ),
+            ) from None
+        current_mtime = os.path.getmtime(path)
+        if abs(current_mtime - expected) > 0.001:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=ApiError.make(
+                    "conflict",
+                    "system.yaml 已被外部修改，请刷新后重试",
+                    details={"current_mtime": current_mtime},
+                ),
+            )
 
     # Validate YAML
     try:
