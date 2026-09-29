@@ -397,7 +397,12 @@ class ResearchEngine:
                 days=int(cfg.get("days", 7)),
                 limit=int(cfg.get("limit", 15)),
             )
-        except Exception:  # noqa: BLE001 - never break a run over memory
+        except Exception as exc:  # noqa: BLE001 - never break a run over memory
+            # Degrading to no memory is the right behaviour, but it is silent:
+            # the run proceeds and simply re-reports what earlier rounds already
+            # covered, with nothing in the log to explain why.
+            logger.warning("Event memory unavailable, continuing without it: %s",
+                           str(exc)[:200])
             return ""
 
     @staticmethod

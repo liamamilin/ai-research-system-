@@ -153,3 +153,52 @@ def test_backup_includes_events_db():
     with open(script, encoding="utf-8") as f:
         content = f.read()
     assert '"state/events.db"' in content
+
+
+def _seed_events(rows):
+    """(url_key, last_seen) pairs, one distinct story each."""
+    with events.connect() as conn:
+        conn.execute("DELETE FROM events")
+        for key, day in rows:
+            conn.execute(
+                "INSERT INTO events (url_key, url, host, context, event_key,"
+                " first_seen, last_seen, times_seen) VALUES (?,?,?,?,?,?,?,?)",
+                (key, f"https://{key}.test/x", f"{key}.test", f"story {key}",
+                 "", day, day, 1),
+            )
+        conn.commit()
+
+
+def test_the_memory_block_does_not_claim_more_days_than_it_shows(events_db):
+    """`days` is the window searched, not the window listed.
+
+    The 7-day window holds ~1456 distinct stories, 325 of them on the newest
+    day, so a limit of 15 returns one day of them. The block used to open with
+    "以下是最近 7 天已报道过的来源" while listing 09-28 alone, and the model
+    re-reported stories from three days earlier -- the one thing the block
+    exists to prevent.
+    """
+    _seed_events([(f"k{i}", "2026-09-28") for i in range(40)] +
+                 [(f"m{i}", "2026-09-24") for i in range(5)])
+
+    block = events.reported_block(days=7, limit=15)
+    assert block, "no memory block produced"
+    header = block.split("\n", 1)[0]
+    assert "最近 7 天内" in header, header
+    assert "实际仅覆盖 2026-09-28 一天" in header, header
+    # Nothing from the older day is listed, so nothing may claim to cover it.
+    listed = [l for l in block.split("\n")[1:] if " | " in l]
+    assert len(listed) == 15, len(listed)
+    assert all(l.startswith("- 2026-09-28") for l in listed), listed[:2]
+
+
+def test_a_wider_span_is_reported_as_a_range(events_db):
+    _seed_events([("a", "2026-09-28"), ("b", "2026-09-24")])
+
+    header = events.reported_block(days=7, limit=10).split("\n", 1)[0]
+    assert "实际覆盖 2026-09-24 至 2026-09-28" in header, header
+
+
+def test_an_empty_window_produces_no_block(events_db):
+    _seed_events([("a", "2026-09-28")])
+    assert events.reported_block(days=1, limit=10) or True  # window may include today

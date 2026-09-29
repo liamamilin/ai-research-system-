@@ -517,8 +517,22 @@ def reported_block(days: int = 7, limit: int = 15) -> str:
         return ""
     if not events:
         return ""
+    # `days` is the window that was searched; it is not how much of the window
+    # this list covers. With 246-615 events a day and a limit of 15, the newest
+    # slice is one day long, so the list used to tell the model "the last 7
+    # days" while showing one of them -- and the model duly re-reported
+    # something from three days ago, which is the one thing this block exists
+    # to prevent. Stated as what it is.
+    seen_days = sorted({str(e.get("last_seen") or "")[:10] for e in events} - {""})
+    if len(seen_days) == 1:
+        span = f"实际仅覆盖 {seen_days[0]} 一天"
+    elif seen_days:
+        span = f"实际覆盖 {seen_days[0]} 至 {seen_days[-1]}"
+    else:
+        span = "日期未知"
     lines = [
-        f"以下是最近 {days} 天已报道过的来源（共 {len(events)} 条）。"
+        f"以下在最近 {days} 天内已报道过的来源中，列出最新的 {len(events)} 条"
+        f"（{span}）。"
         "请勿把同一链接再次当作「新发现」；若确有实质进展（价格、版本、"
         "政策等发生变化），请明确标注「更新」并说明变化点。",
     ]
