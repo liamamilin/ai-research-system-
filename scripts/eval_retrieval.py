@@ -20,6 +20,7 @@ Run it directly to see the current state:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -153,6 +154,63 @@ def newest_round(output_dir: Path) -> str:
     return rounds[-1]
 
 
+_HEADING = re.compile(r"^#{1,6}\s")
+
+
+def section_index() -> dict[tuple, list[str]]:
+    """Map every stored chunk to the sections it covers.
+
+    Scoring a hit by whether its text contains the section heading is wrong, and
+    it was wrong here for a while: a section is split across several chunks, so
+    the answer usually lives in a chunk carrying no heading at all. Measured on
+    31 questions, 16 hits contained the heading while 26 reached the right
+    report -- ten "misses" were the body of the right section arriving without
+    its title.
+
+    The first attempt at fixing that only looked for a heading at the *start* of
+    a chunk and scored worse still, because these reports put a heading at the
+    end of a long table: no chunk begins with `## `, so every chunk in the
+    executive synthesis was attributed to the document title.
+
+    So boundaries are tracked through the chunk sequence instead. A chunk covers
+    every section whose range includes it, and a chunk that straddles a heading
+    covers both -- which is the truth, since the text either side of the
+    heading is in the same excerpt.
+    """
+    from web.indexer import db as index_db
+
+    with index_db.connect() as conn:
+        rows = conn.execute(
+            "SELECT path, chunk_index, content FROM report_chunks "
+            "ORDER BY path, chunk_index").fetchall()
+
+    # (path, chunk_index) -> ordered section starts seen so far
+    index: dict[tuple, list[str]] = {}
+    current_path: str | None = None
+    sections: list[str] = []
+    for row in rows:
+        if row["path"] != current_path:
+            current_path, sections = row["path"], []
+        for line in (row["content"] or "").split("\n"):
+            if _HEADING.match(line):
+                name = line.strip().lstrip("#").strip()
+                if name and (not sections or sections[-1] != name):
+                    sections.append(name)
+        index[(row["path"], row["chunk_index"])] = list(sections)
+    return index
+
+
+def _hit_covers(hit: dict, index: dict[tuple, list[str]], gold: str) -> bool:
+    """True when the chunk sits in, or spans, the section the question asks about.
+
+    ``index`` holds the section starts at or before this chunk. The last one is
+    the section it is in; if a later start was recorded in the same chunk, that
+    chunk also contains the beginning of the following section, so both count.
+    """
+    seen = index.get((hit.get("path"), hit.get("chunk_index"))) or []
+    return any(gold in name for name in seen)
+
+
 def evaluate(date: str | None = None, limit: int = 6, verbose: bool = False) -> dict:
     from web.indexer import vectors
     from web.routes.qa import _retrieval_settings
@@ -172,16 +230,20 @@ def evaluate(date: str | None = None, limit: int = 6, verbose: bool = False) -> 
             "以下 gold 标记在 " + date + " 轮次的索引里找不到，"
             "评估结果不可信：\n  - " + "\n  - ".join(broken))
 
+    sections = section_index()
     found_pass = 0
     found_round = 0
+    found_report = 0
     rows = []
     for question, filename, gold_text in CASES:
         vector = _embed_query(question, sys_config)
         hits = vectors.hybrid_search(question, vector, limit=limit, **retrieval)
+        # A hit answers the question when the *section* it sits in is the one
+        # asked about, whether or not that chunk carries the heading.
         match = next(
             (i for i, h in enumerate(hits)
-             if gold_text in (h.get("snippet") or "")
-             and h["path"].endswith(filename)),
+             if h["path"].endswith(filename)
+             and _hit_covers(h, sections, gold_text)),
             None,
         )
         ok = match is not None
@@ -190,15 +252,22 @@ def evaluate(date: str | None = None, limit: int = 6, verbose: bool = False) -> 
         # of a question about *this* week's risk is a miss, not a hit.
         in_round = ok and date in hits[match]["path"]
         found_round += 1 if in_round else 0
+        # Weaker still, but worth watching separately: did the right report
+        # arrive at all? A miss here is a real recall failure; a miss in the
+        # two columns above may just be the body of the right section arriving
+        # without its title.
+        report_ok = any(h["path"].endswith(filename) and date in h["path"]
+                        for h in hits)
+        found_report += 1 if report_ok else 0
         rows.append({
             "question": question, "ok": ok, "rank": match, "in_round": in_round,
-            "gold": gold_text, "file": filename,
+            "report_ok": report_ok, "gold": gold_text, "file": filename,
             "got": [h["path"].split("/", 1)[-1][:34] for h in hits] if verbose else [],
         })
 
     total = len(CASES)
     return {"date": date, "total": total, "pass": found_pass,
-            "in_round": found_round, "rows": rows}
+            "in_round": found_round, "report": found_report, "rows": rows}
 
 
 def main() -> int:
@@ -211,25 +280,27 @@ def main() -> int:
     result = evaluate(args.date, limit=args.limit, verbose=args.verbose)
     print(f"检索评估 · 轮次 {result['date']} · top-{args.limit}\n")
     for row in result["rows"]:
-        mark = "✓" if row["in_round"] else ("·" if row["ok"] else "×")
-        if row["ok"] and row["in_round"]:
-            note = f"第 {row['rank'] + 1} 位"
+        if row["in_round"]:
+            mark, note = "✓", f"第 {row['rank'] + 1} 位"
         elif row["ok"]:
-            note = f"第 {row['rank'] + 1} 位 · 命中的是更早的轮次"
+            mark, note = "·", f"第 {row['rank'] + 1} 位 · 命中的是更早的轮次"
+        elif row["report_ok"]:
+            mark, note = "◦", "报告对，小节没命中"
         else:
-            note = "未命中"
-        print(f"  {mark} {note:<26} {row['question']}")
+            mark, note = "×", "报告也没召回"
+        print(f"  {mark} {note:<24} {row['question']}")
         if not row["ok"]:
-            print(f"      期望在 {row['file']} 中找到「{row['gold']}」")
+            print(f"      期望在 {row['file']} 中找到「{row['gold']}」小节")
         if args.verbose:
             print(f"      召回: {', '.join(row['got'])}")
+    pct = lambda n: f"{n * 100 // result['total']}%"
     print()
-    print(f"命中答案段落      {result['pass']}/{result['total']}"
-          f"  ({result['pass'] * 100 // result['total']}%)")
+    print(f"命中答案小节      {result['pass']}/{result['total']}  ({pct(result['pass'])})")
     print(f"且来自 {result['date']} 轮次"
-          f"  {result['in_round']}/{result['total']}"
-          f"  ({result['in_round'] * 100 // result['total']}%)")
-    return 0 if result["in_round"] == result["total"] else 1
+          f"  {result['in_round']}/{result['total']}  ({pct(result['in_round'])})")
+    print(f"（参考）召回到正确报告"
+          f"  {result['report']}/{result['total']}  ({pct(result['report'])})")
+    return 0 if result["report"] == result["total"] else 1
 
 
 if __name__ == "__main__":
