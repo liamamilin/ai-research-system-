@@ -380,7 +380,27 @@ class ResearchEngine:
         for key, val in variables.items():
             result = result.replace("{" + key + "}", str(val))
 
+        # Whatever the prompt was handed is something the model was shown, so a
+        # citation of it is grounded rather than invented. Recorded for the
+        # provenance check, which otherwise measures coverage against the URLs
+        # this stage's own tool calls returned -- empty for a synthesis stage.
+        # P7, P8 and P9 run no searches of their own and cite from the upstream
+        # documents, so on the 2026-09-29 round P9 was measured at 0% coverage
+        # against 78 citations that are 97% traceable to P1-P8. The gate would
+        # have fired on every synthesis round, and pointed at the wrong thing.
+        self._prompt_urls = _urls_in(str(variables.get("upstream_reports") or ""))
+
         return result
+
+    def _known_urls(self, agent) -> set:
+        """URLs this report may legitimately cite.
+
+        The ones its own searches returned, plus the ones its prompt was given.
+        """
+        urls = set(getattr(agent, "retrieved_urls", ()) or ())
+        urls |= set(getattr(self, "_prompt_urls", ()) or ())
+        return urls
+
 
     def _reported_events(self) -> str:
         """Sources already reported in recent rounds (suppress duplicates)."""
@@ -456,7 +476,7 @@ class ResearchEngine:
 
             result = provenance_check(
                 content,
-                getattr(agent, "retrieved_urls", ()) or (),
+                self._known_urls(agent),
                 verify_unreachable=bool(cfg.get("verify_unreachable", False)),
                 max_checks=int(cfg.get("max_checks", 10)),
                 timeout=float(cfg.get("timeout", 5.0)),
@@ -580,3 +600,22 @@ class ResearchEngine:
         atomic_write(final_path, content)
         logger.debug("Saved output to %s", final_path)
         return final_path
+
+
+def _urls_in(text: str) -> set:
+    """URLs appearing in a block of text, normalised like provenance does.
+
+    Defined at module level at the *end* on purpose: placing it between methods
+    silently ends the class body, and every method after it becomes a module
+    function. Nothing fails at import -- `ResearchEngine` still constructs, and
+    the failure only shows up as `AttributeError` on whichever method a test
+    happens to call first.
+    """
+    from .provenance import URL_RE, normalize_url
+
+    found = set()
+    for raw in URL_RE.findall(text or ""):
+        url = normalize_url(raw)
+        if url:
+            found.add(url)
+    return found

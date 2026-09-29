@@ -162,3 +162,71 @@ def test_agent_records_retrieved_urls():
     agent._remember([FakeResult("https://a.test/x"), FakeResult("https://a.test/x"),
                      FakeResult("")])
     assert agent.retrieved_urls == {"https://a.test/x"}
+
+
+# --- What a synthesis stage is allowed to cite ------------------------------
+#
+# Coverage was measured against the URLs the reporting stage's own tool calls
+# returned. P7, P8 and P9 run no searches: they are handed the upstream
+# documents and cite from them. On the 2026-09-29 round that made P9 score 0%
+# against 78 citations that are 77 traceable to P1-P8 -- the gate would have
+# fired on every synthesis round and pointed at the wrong thing entirely.
+
+
+def test_urls_handed_to_a_stage_count_as_known():
+    from core.engine import _urls_in
+
+    upstream = "上游文档见 https://a.test/x 和 https://b.test/y?z=1。"
+    found = _urls_in(upstream)
+    assert "https://a.test/x" in found
+    assert "https://b.test/y?z=1" in found
+    assert _urls_in("") == set()
+
+
+def test_a_synthesis_stage_is_not_measured_against_its_own_empty_searches():
+    from core.engine import ResearchEngine, _urls_in
+    from core import provenance
+
+    upstream = "P1 引用 https://a.test/x。\nP2 引用 https://b.test/y。\n"
+    report = "综合结论，来源：https://a.test/x 与 https://b.test/y。"
+
+    class Agent:
+        retrieved_urls = ()          # a synthesis stage searches for nothing
+
+    engine = ResearchEngine.__new__(ResearchEngine)
+    engine._prompt_urls = _urls_in(upstream)
+    known = engine._known_urls(Agent())
+
+    result = provenance.check(report, known)
+    assert result["coverage"] == 1.0, result
+    assert not result["unmatched"]
+
+
+def test_a_genuinely_invented_citation_is_still_caught():
+    """Widening the baseline must not blind the check."""
+    from core.engine import ResearchEngine, _urls_in
+    from core import provenance
+
+    engine = ResearchEngine.__new__(ResearchEngine)
+    engine._prompt_urls = _urls_in("上游只有 https://a.test/x")
+
+    class Agent:
+        retrieved_urls = ()
+
+    result = provenance.check("来源 https://a.test/x 与 https://invented.test/y",
+                              engine._known_urls(Agent()))
+    assert result["unmatched"], result
+    assert result["coverage"] < 1.0
+
+
+def test_a_radar_stage_keeps_its_own_retrieved_urls():
+    from core.engine import ResearchEngine, _urls_in
+
+    engine = ResearchEngine.__new__(ResearchEngine)
+    engine._prompt_urls = _urls_in("上游 https://up.test/a")
+
+    class Agent:
+        retrieved_urls = {"https://search.test/b"}
+
+    known = engine._known_urls(Agent())
+    assert known == {"https://up.test/a", "https://search.test/b"}
