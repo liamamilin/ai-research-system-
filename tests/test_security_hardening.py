@@ -242,3 +242,125 @@ def test_round_diff_against_rejects_non_date(client, web_env):
     _login(client)
     r = client.get("/api/pipeline/rounds/2026-09-24/diff?against=..%2F..%2Fetc")
     assert r.status_code in (422, 404)
+
+
+# --- every write route needs a role gate -------------------------------------
+
+# Routes that write without a role gate, and why that is not a hole.
+#
+# The first group is reachable before a caller has an identity at all, so no
+# role can apply yet. The second is self-service: each one scopes itself to
+# the caller's own user id taken from the JWT -- revoking a session checks
+# `session["user_id"] == caller`, and revoking a token passes that same id
+# into the query -- so a role gate would add nothing, and "admin may delete
+# anyone's token" is not the property we want anyway.
+_UNGATED_WRITE_EXEMPT = (
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/refresh",
+    "/api/auth/change-password",
+    "/api/auth/sessions/",
+    "/api/auth/tokens",
+)
+
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _roles_named(dependant, ranks):
+    """Every role named anywhere in this route's dependency tree."""
+    found: set[str] = set()
+    for dep in dependant.dependencies:
+        fn = getattr(dep, "call", None) or getattr(dep, "dependency", None)
+        if fn is None:
+            continue
+        for cell in getattr(fn, "__closure__", None) or ():
+            value = cell.cell_contents
+            if isinstance(value, str) and value in ranks:
+                found.add(value)
+        found |= _roles_named(dep, ranks)
+    return found
+
+
+def _role_floor(dependant, ranks):
+    """The weakest role this route's dependencies demand, or None if ungated.
+
+    Two traps, both hit while auditing this by hand:
+
+    - `require_admin` is a closure returned by `require_role`, so every gate's
+      `__name__` is `_dep`. Matching on the name finds nothing and reports
+      every route as ungated, which looks like a total failure rather than a
+      broken check.
+    - the role is not an attribute; it is the `min_role` string captured in a
+      closure cell. Read the cells.
+
+    So: walk the dependencies, look for any string cell that names a role.
+    """
+    found = _roles_named(dependant, ranks)
+    return min(found, key=lambda r: ranks[r]) if found else None
+
+
+def test_every_api_write_route_declares_a_role(web_env):
+    """A new route added without `Depends(require_*)` must fail here, not in prod.
+
+    Checked by probing a real viewer: 12 privileged writes (run a job, edit or
+    delete a job YAML, run the pipeline, rewrite system.yaml, read secret
+    status, create a user, shut the app down) all returned 403, and the ten
+    reads a viewer needs still returned 200. That is the behaviour; this is
+    the thing that keeps it true, because the gate is one `Depends` call that
+    nothing else in the codebase would notice missing.
+    """
+    from web.deps import _ROLE_RANK
+    from web.server import create_app
+
+    app = create_app()
+    ungated = []
+    for route in app.routes:
+        methods = set(getattr(route, "methods", None) or ())
+        path = getattr(route, "path", "")
+        if not methods & _WRITE_METHODS or not path.startswith("/api"):
+            continue
+        if path.startswith(_UNGATED_WRITE_EXEMPT):
+            continue
+        if _role_floor(route.dependant, _ROLE_RANK) is None:
+            ungated.append(f"{path} [{'/'.join(sorted(methods & _WRITE_METHODS))}]")
+
+    assert not ungated, "write routes with no role gate: " + ", ".join(sorted(ungated))
+
+
+def test_the_role_gate_itself_is_not_vacuous(web_env):
+    """The sweep above must be able to see a gate, or it proves nothing.
+
+    This is the false alarm that cost the most while auditing: the first
+    version of the sweep matched on `__name__`, found nothing on any route, and
+    reported all 43 as ungated -- which reads exactly like a total security
+    failure. It is the check that was broken.
+    """
+    from web.deps import _ROLE_RANK
+    from web.server import create_app
+
+    app = create_app()
+    # Keyed by (path, method): `GET /api/jobs` and `POST /api/jobs` are
+    # different routes with different gates (viewer vs editor), and a dict
+    # keyed by path alone silently keeps only the last one.
+    by_route = {
+        (getattr(r, "path", ""), m): r
+        for r in app.routes
+        for m in (getattr(r, "methods", None) or ())
+    }
+
+    # One editor-only write and one admin-only write, named explicitly.
+    run = by_route[("/api/jobs/{name:path}/run", "POST")]
+    assert _role_floor(run.dependant, _ROLE_RANK) == "editor"
+    cfg = by_route[("/api/config/system", "PUT")]
+    assert _role_floor(cfg.dependant, _ROLE_RANK) == "admin"
+
+    # A read that genuinely has no gate, so the sweep can tell "ungated" from
+    # "not looked at". /api/health is the right example: a liveness probe has
+    # no session to check a role against.
+    health = by_route[("/api/health", "GET")]
+    assert _role_floor(health.dependant, _ROLE_RANK) is None
+
+    # Reads the app does gate. Worth naming, because "no write route is
+    # ungated" would also be satisfied by a sweep that read nothing at all.
+    jobs_read = by_route[("/api/jobs", "GET")]
+    assert _role_floor(jobs_read.dependant, _ROLE_RANK) == "viewer"
