@@ -287,7 +287,7 @@ def update_system_config(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=ApiError.make(
                     "conflict",
-                    "system.yaml 已被外部修改，请刷新后重试",
+                    "system.yaml 已被外部修改，刷新会丢弃未保存的修改，请先复制再刷新重试",
                     details={"current_mtime": current_mtime},
                 ),
             )

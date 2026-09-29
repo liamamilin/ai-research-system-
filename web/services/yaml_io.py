@@ -122,6 +122,12 @@ def validate_output_path(data: dict, output_root: str = "output") -> list[str]:
 def check_conflict(file_path: str, expected_mtime: float) -> Optional[float]:
     """Check if the file was modified since `expected_mtime`.
     Returns the current mtime if different, None if no conflict.
+
+    The 10ms tolerance absorbs filesystem timestamp jitter, not real edits: two
+    writes in quick succession can land tens of microseconds apart, and treating
+    that as a conflict would reject saves nobody made in conflict. No edit a
+    person or a script performs is that fast, so tightening this trades a real
+    protection for a phantom one.
     """
     try:
         current_mtime = os.path.getmtime(file_path)
@@ -259,9 +265,13 @@ def save_job_yaml(
     if expected_mtime is not None:
         conflict = check_conflict(file_path, expected_mtime)
         if conflict is not None:
+            # The refresh we ask for here reloads the page, which throws away
+            # whatever the user has typed but not yet saved. Saying only
+            # "请刷新后重试" reads as advice, not as a warning, and the edit
+            # disappears with no trace -- so name the cost and the way out.
             raise IOError(
                 f"文件已被外部修改 (mtime: {expected_mtime} → {conflict})。"
-                f"请刷新后重试。"
+                f"刷新会丢弃编辑器里未保存的修改，请先复制再刷新重试。"
             )
 
     # Read old content and backup BEFORE writing
