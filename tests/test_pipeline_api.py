@@ -204,3 +204,41 @@ def test_round_export_syncs_tracking(web_env):
     assert {i["kind"] for i in items} == {"action", "watch"}
     assert any("迁移模型" in i["text"] for i in items)
     assert any("GPT-5.5 退役" in i["text"] for i in items)
+
+
+def test_artifact_warnings_reach_the_log_on_the_web_path(web_env, caplog):
+    """A run started from the UI reported "artifacts exported" and nothing else.
+
+    The artifact contract collects warnings for anything it could not map -- an
+    unrecognised column, a section that came out empty -- and the CLI path has
+    always surfaced them through the finish summary. The web runner called the
+    same function and discarded them, so a round whose tests table had lost its
+    success criteria was indistinguishable from a clean one. It is the path
+    the UI uses, which is the one that matters here.
+    """
+    import logging
+
+    tmp_path, _ = web_env
+    (tmp_path / "config" / "system.yaml").write_text(
+        f"defaults:\n  output_dir: \"{tmp_path / 'output'}\"\n", encoding="utf-8")
+    round_dir = tmp_path / "output" / "practical_ai_intelligence" / "2026-01-03"
+    round_dir.mkdir(parents=True)
+    # A column the contract has no name for.
+    (round_dir / "09_executive_synthesis_and_actions.md").write_text(
+        "## 2. Immediate Actions\n\n"
+        "| # | 行动 | 完全没见过的列 |\n|---|---|---|\n"
+        "| A1 | 迁移模型 | x |\n", encoding="utf-8")
+
+    from web.runner import pipeline
+    with caplog.at_level(logging.WARNING, logger=pipeline.logger.name):
+        pipeline._export_round_artifacts({"date": "2026-01-03"},
+                                         str(tmp_path / "config"))
+
+    # Scoped to this logger on purpose: core.artifacts logs the same warning
+    # itself, so an unscoped assertion passes whether or not the runner
+    # forwards anything.
+    mine = [r for r in caplog.records if r.name == pipeline.logger.name]
+    assert mine, "the runner logged nothing; core.artifacts' own line would " \
+                 "otherwise satisfy a looser check"
+    assert any("未识别的表头" in r.message for r in mine), \
+        "the unmapped column was not forwarded: " + str([r.message for r in mine])

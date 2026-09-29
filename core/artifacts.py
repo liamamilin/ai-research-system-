@@ -71,7 +71,18 @@ _FIELD_ALIASES: dict[str, list[str]] = {
         "方法", "步骤", "做法", "method", "approach", "steps", "how",
     ],
     "success_criteria": [
-        "成功标准", "判定标准", "通过标准", "successcriteria", "passcriteria", "criteria",
+        # P9 writes "成功判据", which matched neither the aliases nor the
+        # keyword list below, so the column landed under `col_4`. The
+        # definition of done for each test was in the report and absent from
+        # the artifact, reachable by nothing that reads `success_criteria`.
+        "成功标准", "判定标准", "通过标准", "成功判据", "判据", "完成判据",
+        "successcriteria", "passcriteria", "criteria",
+    ],
+    "ref": [
+        # The action and test tables lead with a column literally headed "#",
+        # holding the row ids P9 refers to throughout its prose (A1, T1, ...).
+        # Unmapped it became `col_1` and produced a warning on every round.
+        "#", "编号", "序号", "标号", "ref", "id", "no", "num",
     ],
     "risk": [
         "风险", "risk", "risks",
@@ -108,7 +119,7 @@ _HEADER_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("deadline", ("截止", "时限", "期限", "何时")),
     ("topic", ("观察", "议题", "主题", "关注")),
     ("expected_benefit", ("收益", "价值", "好处")),
-    ("success_criteria", ("成功标准", "判定", "通过")),
+    ("success_criteria", ("成功标准", "成功判据", "判据", "判定", "通过")),
     ("risk", ("风险",)),
     ("priority", ("优先",)),
     ("effort", ("成本", "投入", "工作量")),

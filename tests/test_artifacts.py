@@ -390,3 +390,49 @@ def test_export_empty_dir_returns_none(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert artifacts.export_round_artifacts(str(empty)) is None
+
+
+# --- The shape P9 actually writes -----------------------------------------
+#
+# The sample above uses friendly column names. The real 2026-09-28 report
+# leads both tables with a column headed `#`, holding the row ids P9 cites in
+# its prose, and heads the tests table "成功判据". Neither matched, so every
+# round produced warnings and the definition of done for each test landed under
+# `col_4` -- present in the report, reachable by nothing that reads
+# `success_criteria`.
+
+P9_AS_WRITTEN = """
+## 2. Immediate Actions
+
+| # | 行动 | 为什么现在 | 相关雷达 | 预期收益 | 工作量 | 优先级 |
+|---|---|---|---|---|---|---|
+| A1 | 审计默认模型 | 成本漂移 | P2 | 可测 | 1 天 | **P0** |
+
+## 3. Test This Week
+
+| # | 测试 | 方法 | 成功判据 | 成本 | 风险 | 优先级 |
+|---|---|---|---|---|---|---|
+| T1 | HITL 重放安全 | 等待期 kill -9 后重跑 | 重放 3 次，外部副作用恰好发生 1 次 | 人时 1–2 天 | 需改代码结构 | **P0** |
+"""
+
+
+def test_the_row_id_column_is_captured_not_warned_about():
+    parsed = artifacts.parse_action_items(P9_AS_WRITTEN)
+    assert parsed["actions"][0]["ref"] == "A1"
+    assert parsed["tests"][0]["ref"] == "T1"
+    assert parsed.get("warnings") == [], parsed.get("warnings")
+
+
+def test_the_definition_of_done_reaches_the_artifact():
+    parsed = artifacts.parse_action_items(P9_AS_WRITTEN)
+    assert parsed["tests"][0]["success_criteria"] == \
+        "重放 3 次，外部副作用恰好发生 1 次"
+    assert not [k for k in parsed["tests"][0] if k.startswith("col_")], \
+        "the criteria column was still landing under a positional name"
+
+
+def test_priority_still_arrives_without_its_markup():
+    """`**P0**` and `P0` are the same priority; the badge is not part of it."""
+    parsed = artifacts.parse_action_items(P9_AS_WRITTEN)
+    assert parsed["actions"][0]["priority"] == "P0"
+    assert parsed["tests"][0]["priority"] == "P0"

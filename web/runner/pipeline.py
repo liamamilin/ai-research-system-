@@ -281,6 +281,17 @@ def _export_round_artifacts(state: dict, config_dir: str) -> None:
         if written:
             logger.info("Round %s artifacts exported", state["date"])
             _sync_round_tracking(state["date"], written)
+            # The artifact contract reports drift it could not map -- a column
+            # the parser does not recognise, a section that came out empty.
+            # Those warnings were collected and then dropped here, so a run
+            # started from the UI reported "artifacts exported" and nothing
+            # else, and a round whose tests table had lost its success
+            # criteria looked exactly like a clean one. The CLI path has always
+            # surfaced them through the finish summary.
+            for name, payload in written.items():
+                for warning in (payload or {}).get("warnings") or []:
+                    logger.warning("Round %s artifact %s: %s",
+                                   state["date"], name, warning)
     except Exception as exc:  # noqa: BLE001 - artifacts are best-effort
         logger.warning("Round %s artifact export failed: %s", state["date"], exc)
 
