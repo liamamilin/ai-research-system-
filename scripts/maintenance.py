@@ -159,6 +159,7 @@ def prune_lock_sidecars(state_dir: Path, days: int, dry_run: bool) -> str:
     """
     cutoff = time.time() - days * 86400
     removed = freed = 0
+    stuck = 0
     for path in list(state_dir.glob("*.lock")) + list((state_dir / "locks").glob("*")):
         if not path.is_file() or path.suffix not in (".lock", ""):
             continue
@@ -171,8 +172,16 @@ def prune_lock_sidecars(state_dir: Path, days: int, dry_run: bool) -> str:
             removed += 1
             freed += size
         except OSError:
-            continue
-    return f"lock sidecars: {removed} 个（{freed} 字节）" if removed else "lock sidecars: 无可清理"
+            # Counted rather than skipped: a sidecar that cannot be removed is
+            # retried on every run for ever, and the report used to imply the
+            # directory was clean.
+            stuck += 1
+    if not removed and not stuck:
+        return "lock sidecars: 无可清理"
+    report = f"lock sidecars: {removed} 个（{freed} 字节）"
+    if stuck:
+        report += f"，{stuck} 个删除失败"
+    return report
 
 
 def prune_logs(logs_dir: Path, days: int, dry_run: bool) -> str:
@@ -184,6 +193,7 @@ def prune_logs(logs_dir: Path, days: int, dry_run: bool) -> str:
     """
     cutoff = time.time() - days * 86400
     removed = freed = 0
+    stuck = 0
     for path in logs_dir.rglob("*"):
         if not path.is_file():
             continue
@@ -198,7 +208,7 @@ def prune_logs(logs_dir: Path, days: int, dry_run: bool) -> str:
             removed += 1
             freed += size
         except OSError:
-            continue
+            stuck += 1
     # Empty subdirectories left behind.
     if not dry_run:
         for path in sorted(logs_dir.rglob("*"), reverse=True):
@@ -207,7 +217,10 @@ def prune_logs(logs_dir: Path, days: int, dry_run: bool) -> str:
                     path.rmdir()
                 except OSError:
                     pass
-    return f"logs: {removed} 个文件（{freed / 1048576:.1f} MB）"
+    report = f"logs: {removed} 个文件（{freed / 1048576:.1f} MB）"
+    if stuck:
+        report += f"，{stuck} 个删除失败"
+    return report
 
 
 def prune_backups(state_dir: Path, keep: int, dry_run: bool) -> str:
@@ -221,18 +234,33 @@ def prune_backups(state_dir: Path, keep: int, dry_run: bool) -> str:
         return "backups: 无"
     freed = 0
     removed = 0
+    stuck = 0
 
     def trim(entries: list[Path]) -> None:
-        nonlocal freed, removed
+        nonlocal freed, removed, stuck
         for path in entries[:max(0, len(entries) - keep)]:
+            if dry_run:
+                freed += _size(path)
+                removed += 1
+                continue
+            # Counted only once the path is actually gone. This used
+            # rmtree(ignore_errors=True) and credited the size either way, so a
+            # snapshot that could not be deleted was still reported as removed
+            # and as megabytes freed -- a report claiming to have reclaimed
+            # space it had not, and claiming it again on every run since.
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                stuck += 1
+                continue
+            if path.exists():
+                stuck += 1
+                continue
             freed += _size(path)
             removed += 1
-            if dry_run:
-                continue
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                path.unlink(missing_ok=True)
 
     # is_dir()/suffix filtering rather than glob("*/"): on Python 3.10 a
     # trailing slash in the pattern is ignored, so glob("*/") matches the .yaml
@@ -240,7 +268,10 @@ def prune_backups(state_dir: Path, keep: int, dry_run: bool) -> str:
     # which deleted every snapshot directory while keeping config copies.
     trim(sorted(p for p in root.iterdir() if p.is_dir()))
     trim(sorted(root.glob("*.yaml")))
-    return f"backups: {removed} 项（{freed / 1048576:.1f} MB）"
+    report = f"backups: {removed} 项（{freed / 1048576:.1f} MB）"
+    if stuck:
+        report += f"，{stuck} 项删除失败"
+    return report
 
 
 def main() -> int:
@@ -268,11 +299,23 @@ def main() -> int:
         ("backups", lambda: prune_backups(state_dir, args.backups, args.dry_run)),
         ("empty-rounds", lambda: prune_empty_round_dirs(output_dir, args.lock_days, args.dry_run)),
     )
+    failed: list[str] = []
     for name, step in steps:
         try:
             print(f"{prefix}{name}: {step()}", flush=True)
         except Exception as exc:  # noqa: BLE001 - one bad step must not stop the rest
+            failed.append(name)
             print(f"{prefix}{name}: FAILED ({exc})", file=sys.stderr, flush=True)
+
+    # Running every step even when one fails is the point -- a locked database
+    # must not stop the logs being cleaned. But the exit code was 0 either way,
+    # and this runs hourly from launchd, so a step that had been failing for a
+    # week looked exactly like a clean run to anything reading the exit status.
+    # The detail was printed to stderr, which nothing was checking.
+    if failed:
+        print(f"{len(failed)} step(s) failed: {', '.join(failed)}",
+              file=sys.stderr, flush=True)
+        return 1
     return 0
 
 

@@ -318,7 +318,7 @@ def test_one_failing_step_does_not_stop_the_others(tree, monkeypatch, capsys):
     argv = _sys.argv
     _sys.argv = ["maintenance.py", "--state-dir", str(state), "--logs-dir", str(logs)]
     try:
-        assert maintenance.main() == 0
+        code = maintenance.main()
     finally:
         _sys.argv = argv
     captured = capsys.readouterr()
@@ -326,6 +326,10 @@ def test_one_failing_step_does_not_stop_the_others(tree, monkeypatch, capsys):
     # The later steps still ran, which is the whole point.
     for step in ("sessions:", "lock sidecars:", "logs:", "backups:"):
         assert step in captured.out, f"{step} did not run"
+    # ...but the run must not report success. This used to return 0 either way,
+    # and maintenance runs hourly from launchd, so a step failing every night
+    # was indistinguishable from a clean run to anything reading the status.
+    assert code == 1, "a failed step was reported as a successful run"
 
 
 # --- wiring ------------------------------------------------------------------
@@ -345,3 +349,45 @@ def test_deprecated_cleanup_script_delegates():
     body = (ROOT / "scripts" / "cleanup_logs.py").read_text(encoding="utf-8")
     assert "maintenance" in body
     assert "prune_logs" in body
+
+
+def test_a_backup_that_cannot_be_deleted_is_not_reported_as_freed(tmp_path):
+    """The report claimed megabytes it had not reclaimed, and claimed them again
+    on every run since, because `rmtree(ignore_errors=True)` swallowed the
+    failure while the size was credited regardless."""
+    import shutil as _shutil
+
+    state = tmp_path / "state"
+    root = state / "backups"
+    root.mkdir(parents=True)
+    for i in range(3):
+        snap = root / f"2026092{i}_000000"
+        snap.mkdir()
+        (snap / "users.db").write_bytes(b"x" * 4096)
+
+    real_rmtree = _shutil.rmtree
+
+    def refuse(path, *a, **k):
+        raise PermissionError(f"cannot remove {path}")
+
+    _shutil.rmtree = refuse
+    try:
+        report = maintenance.prune_backups(state, keep=1, dry_run=False)
+    finally:
+        _shutil.rmtree = real_rmtree
+
+    # keep=1 of three snapshots, so two deletions are attempted and both fail.
+    assert "2 项删除失败" in report, report
+    assert "0 项" in report, f"claimed removals it did not make: {report}"
+    assert (root / "20260920_000000").is_dir(), "the surviving snapshot was deleted"
+
+
+def test_dry_run_still_reports_what_it_would_free(tmp_path):
+    state = tmp_path / "state"
+    root = state / "backups"
+    root.mkdir(parents=True)
+    for i in range(3):
+        (root / f"2026092{i}_000000").mkdir()
+    report = maintenance.prune_backups(state, keep=1, dry_run=True)
+    assert "2 项" in report, report
+    assert len(list(root.iterdir())) == 3, "dry-run deleted something"
